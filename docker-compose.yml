@@ -1,0 +1,38 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tree-education-uniinfo-mysql
+    environment:
+      MYSQL_DATABASE: tree_education_uniinfo
+      MYSQL_USER: tree_user
+      MYSQL_PASSWORD: tree_password
+      MYSQL_ROOT_PASSWORD: root_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./sql/indexes.sql:/docker-entrypoint-initdb.d/02-indexes.sql:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: tree-education-uniinfo-redis
+    ports:
+      - "6379:6379"
+
+  adminer:
+    image: adminer:latest
+    container_name: tree-education-uniinfo-adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mysql
+
+volumes:
+  mysql_data:

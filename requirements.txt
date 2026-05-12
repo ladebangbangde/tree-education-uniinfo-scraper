@@ -1,0 +1,10 @@
+playwright
+beautifulsoup4
+sqlalchemy
+pymysql
+python-dotenv
+loguru
+tenacity
+typer
+requests
+urllib3
