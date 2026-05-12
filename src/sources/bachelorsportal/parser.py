@@ -94,8 +94,16 @@ def _location_parts(location: str | None) -> tuple[str | None, str | None]:
 
 def _location_from_text(text: str) -> str | None:
     """Best-effort location fallback for card text."""
+    labelled = re.search(
+        r"(?:Location|City)\s*:?\s*(.*?)(?:\s+Attendance\b|\s+Global Ranking\b|\s+Institution type\b|\s+Bachelors?\b|\s+Masters?\b|\s+Scholarships?\b|$)",
+        text,
+        re.I,
+    )
+    if labelled:
+        candidate = clean_text(labelled.group(1))
+        if candidate:
+            return candidate
     patterns = [
-        r"(?:Location|City)\s*:?\s*([A-Z][A-Za-z .'-]+),\s*(United Kingdom|England|Scotland|Wales|Northern Ireland)",
         r"([A-Z][A-Za-z .'-]+),\s*(United Kingdom|England|Scotland|Wales|Northern Ireland)",
     ]
     for pattern in patterns:
@@ -105,6 +113,31 @@ def _location_from_text(text: str) -> str | None:
     if "United Kingdom" in text:
         return "United Kingdom"
     return None
+
+
+def _name_from_card_text(text: str | None) -> str | None:
+    """Extract the university name when an anchor wraps the whole result card."""
+    cleaned = clean_text(text)
+    if not cleaned:
+        return None
+    marker_match = re.search(
+        r"\s+(?:\d(?:\.\d+)?\s*\(\d[\d,]*\)|Location\b|Attendance\b|Global Ranking\b|Institution type\b|Bachelors?\b|Masters?\b|Scholarships?\b)",
+        cleaned,
+        re.I,
+    )
+    name = cleaned[: marker_match.start()].strip() if marker_match else cleaned.strip()
+    return name or None
+
+
+def _programme_count_from_text(text: str) -> int | None:
+    """Return the public programme count shown on university cards.
+
+    The requested command is a Bachelorsportal URL, but Studyportals may redirect
+    the public university list to a Mastersportal page whose cards display
+    "Masters N". Persist this count in the existing bachelor_count column as the
+    public list's programme-count snapshot instead of dropping the field.
+    """
+    return _count_near_label(text, "Bachelor") or _count_near_label(text, "Master")
 
 
 def _count_near_label(text: str, label: str) -> int | None:
@@ -140,6 +173,7 @@ def _review_count_from_text(text: str) -> int | None:
     patterns = [
         r"reviews?\s*:?\s*(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\b",
         r"(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\s+reviews?\b",
+        r"\d(?:\.\d+)?\s*\((\d[\d,]*|\d+(?:\.\d+)?[KkMm])\)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
@@ -164,7 +198,7 @@ def _record_from_values(*, url: str, name: str | None, text: str, location: str 
         "city": city,
         "location_text": location,
         "institution_type": institution_type_match.group(0) if institution_type_match else None,
-        "bachelor_count": _count_near_label(text, "Bachelor"),
+        "bachelor_count": _programme_count_from_text(text),
         "scholarship_count": _count_near_label(text, "Scholarship"),
         "ranking_text": None,
         "rating": _rating_from_text(text),
@@ -238,7 +272,7 @@ def _parse_university_cards_regex(html: str, page_url: str) -> list[dict]:
             end = min(len(html), match.end() + 1800)
         card_html = html[start:end]
         text = clean_text(card_html) or ""
-        name = clean_text(match.group("body"))
+        name = _name_from_card_text(match.group("body"))
         location_match = re.search(r"(?:data-testid=[\"']location[\"'][^>]*>|class=[\"'][^\"']*location[^\"']*[\"'][^>]*>)(.*?)<", card_html, re.I | re.S)
         location = clean_text(location_match.group(1)) if location_match else _location_from_text(text)
         record = _record_from_values(url=url, name=name, text=text, location=location)
@@ -293,7 +327,7 @@ def parse_university_cards(html: str, page_url: str) -> list[dict]:
             text = clean_text(node.get_text(" ")) or ""
             name = (
                 _first_text(node, ["h2", "h3", '[data-testid*="name" i]', '[data-testid*="title" i]', '[class*="Title"]', '[class*="title"]'])
-                or clean_text(link.get_text(" "))
+                or _name_from_card_text(link.get_text(" "))
             )
             location = (
                 _first_text(node, ['[data-testid*="location" i]', '[class*="Location"]', '[class*="location"]'])

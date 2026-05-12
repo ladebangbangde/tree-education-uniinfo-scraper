@@ -249,5 +249,5 @@ WHERE name IS NULL OR name = ''
 6. 运行基础测试：
 
 ```bash
-python -m unittest discover -s tests -v
+pytest -q
 ```
