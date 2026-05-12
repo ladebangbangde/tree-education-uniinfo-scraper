@@ -108,7 +108,7 @@ python -m src.main init-db
 python -m src.main crawl-universities --country united-kingdom --limit 10
 ```
 
-This opens the public Bachelorsportal bachelor university search page, extracts the first 10 university cards where possible, saves an HTML snapshot, and upserts rows into `university`.
+This opens `https://www.bachelorsportal.com/search/universities/bachelor/united-kingdom`, extracts the first 10 university cards where possible, saves an HTML snapshot, and upserts rows into `university`.
 
 ### Crawl university detail
 

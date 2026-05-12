@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
+from ...logger import logger
 from ...pipelines.normalize import normalize_count, normalize_rating, normalize_duration, normalize_tuition
 
 BASE_URL = "https://www.bachelorsportal.com"
@@ -50,57 +51,91 @@ def _first_text(node, selectors: list[str]) -> str | None:
     return None
 
 
-def _absolute(href: str | None) -> str | None:
+def _absolute(href: str | None, base_url: str = BASE_URL) -> str | None:
     if not href:
         return None
-    return urljoin(BASE_URL, href)
+    return urljoin(base_url, href)
+
+
+def _location_from_text(text: str) -> str | None:
+    """Best-effort location fallback for card text."""
+    match = re.search(r"([A-Z][A-Za-z .'-]+),\s*(United Kingdom|England|Scotland|Wales|Northern Ireland)", text)
+    if match:
+        return f"{match.group(1)}, {match.group(2)}"
+    if "United Kingdom" in text:
+        return "United Kingdom"
+    return None
+
+
+def _university_card_nodes(soup: BeautifulSoup) -> list:
+    """Return likely university result containers without depending on one CSS class."""
+    selectors = [
+        '[data-testid*="university" i]',
+        'article',
+        'li',
+        'div.SearchResultItem',
+        'div[class*="SearchResult"]',
+        'div[class*="University"]',
+        'div[class*="Card"]',
+    ]
+    nodes = list(soup.select(", ".join(selectors)))
+    # Fallback: if the page uses only anchors inside a client-rendered list, use
+    # each anchor's nearest useful parent as the parse container.
+    for link in soup.select('a[href*="/universities/"], a[href*="/university/"]'):
+        parent = link.find_parent(["article", "li", "section", "div"])
+        if parent is not None:
+            nodes.append(parent)
+    return nodes
 
 
 def parse_university_cards(html: str, page_url: str) -> list[dict]:
     soup = soupify(html)
-    candidates = soup.select('[data-testid*="university"], article, li, div.SearchResultItem, div[class*="SearchResult"], div[class*="Card"]')
     seen: set[str] = set()
     records: list[dict] = []
-    for node in candidates:
-        link = node.select_one('a[href*="/universities/"], a[href*="/university/"]')
-        if not link:
-            continue
-        url = _absolute(link.get("href"))
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        name = clean_text(link.get_text(" ")) or _first_text(node, ["h2", "h3", "[class*=title]", "[class*=Title]"])
-        text = clean_text(node.get_text(" ")) or ""
-        location = _first_text(node, ['[data-testid*="location"]', '[class*="Location"]', '[class*="location"]'])
-        country = None
-        city = None
-        if location and "," in location:
-            parts = [p.strip() for p in location.split(",")]
-            city, country = parts[0], parts[-1]
-        elif location:
-            country = location
-        bachelor_match = re.search(r"(\d[\d,]*|\d+(?:\.\d+)?K)\s+Bachelors?", text, re.I)
-        scholarship_match = re.search(r"(\d[\d,]*|\d+(?:\.\d+)?K)\s+Scholarships?", text, re.I)
-        rating_match = re.search(r"(?:rating|rated)?\s*(\d\.\d)", text, re.I)
-        review_match = re.search(r"(\d[\d,]*|\d+(?:\.\d+)?K)\s+reviews?", text, re.I)
-        records.append({
-            "source_site": SOURCE_SITE,
-            "source_university_id": source_id_from_url(url),
-            "source_url": url,
-            "name": name,
-            "country": country,
-            "city": city,
-            "location_text": location,
-            "institution_type": _first_text(node, ['[data-testid*="institution"]', '[class*="Institution"]']),
-            "bachelor_count": normalize_count(bachelor_match.group(1)) if bachelor_match else None,
-            "scholarship_count": normalize_count(scholarship_match.group(1)) if scholarship_match else None,
-            "ranking_text": _first_text(node, ['[data-testid*="ranking"]', '[class*="Ranking"]']),
-            "rating": normalize_rating(rating_match.group(1)) if rating_match else None,
-            "review_count": normalize_count(review_match.group(1)) if review_match else None,
-            "description": _first_text(node, ["p", '[class*="Description"]', '[class*="description"]']),
-            "official_website_url": None,
-            "is_featured": 1 if re.search(r"featured", text, re.I) else 0,
-        })
+    for node in _university_card_nodes(soup):
+        try:
+            link = node.select_one('a[href*="/universities/"], a[href*="/university/"]')
+            if not link:
+                continue
+            url = _absolute(link.get("href"), page_url)
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            text = clean_text(node.get_text(" ")) or ""
+            name = _first_text(node, ["h2", "h3", '[data-testid*="name" i]', "[class*=title]", "[class*=Title]"]) or clean_text(link.get_text(" "))
+            location = _first_text(node, ['[data-testid*="location" i]', '[class*="Location"]', '[class*="location"]']) or _location_from_text(text)
+            country = None
+            city = None
+            if location and "," in location:
+                parts = [part.strip() for part in location.split(",") if part.strip()]
+                city, country = parts[0], parts[-1]
+            elif location:
+                country = location
+            bachelor_match = re.search(r"(\d[\d,]*|\d+(?:\.\d+)?K)\s+Bachelors?", text, re.I)
+            scholarship_match = re.search(r"(\d[\d,]*|\d+(?:\.\d+)?K)\s+Scholarships?", text, re.I)
+            rating_match = re.search(r"(?:rating|rated)?\s*(\d\.\d)", text, re.I)
+            review_match = re.search(r"(\d[\d,]*|\d+(?:\.\d+)?K)\s+reviews?", text, re.I)
+            institution_type_match = re.search(r"\b(Private|Public)\s+(?:University|Institution)\b", text, re.I)
+            records.append({
+                "source_site": SOURCE_SITE,
+                "source_university_id": source_id_from_url(url),
+                "source_url": url,
+                "name": name,
+                "country": country,
+                "city": city,
+                "location_text": location,
+                "institution_type": _first_text(node, ['[data-testid*="institution" i]', '[class*="Institution"]']) or (institution_type_match.group(0) if institution_type_match else None),
+                "bachelor_count": normalize_count(bachelor_match.group(1)) if bachelor_match else None,
+                "scholarship_count": normalize_count(scholarship_match.group(1)) if scholarship_match else None,
+                "ranking_text": _first_text(node, ['[data-testid*="ranking" i]', '[class*="Ranking"]']),
+                "rating": normalize_rating(rating_match.group(1)) if rating_match else None,
+                "review_count": normalize_count(review_match.group(1)) if review_match else None,
+                "description": _first_text(node, ["p", '[class*="Description"]', '[class*="description"]']),
+                "official_website_url": None,
+                "is_featured": 1 if re.search(r"featured", text, re.I) else 0,
+            })
+        except Exception as exc:
+            logger.exception("Failed to parse one university card: {}", exc)
     return records
 
 
