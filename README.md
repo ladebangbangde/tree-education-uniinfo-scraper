@@ -187,3 +187,67 @@ Possible causes:
 - The country query parameter format changed.
 
 Do not bypass protections. Inspect the saved snapshot if one exists, then update selectors responsibly.
+
+## P0 验收步骤
+
+> 验收前请确认 `.env` 中 `DATABASE_URL` 指向可用的 MySQL 8 实例，并已执行 `playwright install chromium`。爬虫保持单线程、低频请求，并在每次请求前检查 `robots.txt`。
+
+1. 启动 MySQL：
+
+```bash
+docker compose up -d mysql
+```
+
+2. 初始化数据库表：
+
+```bash
+python -m src.main init-db
+```
+
+3. 抓取英国本科大学列表页前 10 条公开结果：
+
+```bash
+python -m src.main crawl-universities --country united-kingdom --limit 10
+```
+
+4. 如果命令没有报错但写入 0 条，请先查看最近保存的 HTML snapshot，不要绕过验证码、不要绕过 robots、不要加代理池：
+
+```bash
+find data/snapshots/bachelorsportal -type f | sort | tail -5
+```
+
+5. 使用 SQL 检查 `university` 表是否至少写入 1 条有效学校数据，且 `name`、`source_url`、`source_university_id` 非空：
+
+```sql
+SELECT COUNT(*) AS university_count
+FROM university;
+
+SELECT id,
+       name,
+       source_url,
+       source_university_id,
+       country,
+       city,
+       location_text,
+       bachelor_count,
+       scholarship_count,
+       rating,
+       review_count,
+       source_hash,
+       last_crawled_at
+FROM university
+ORDER BY id DESC
+LIMIT 10;
+
+SELECT COUNT(*) AS invalid_identity_count
+FROM university
+WHERE name IS NULL OR name = ''
+   OR source_url IS NULL OR source_url = ''
+   OR source_university_id IS NULL OR source_university_id = '';
+```
+
+6. 运行基础测试：
+
+```bash
+python -m unittest discover -s tests -v
+```
