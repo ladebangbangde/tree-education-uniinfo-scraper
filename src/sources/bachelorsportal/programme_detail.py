@@ -18,6 +18,21 @@ FACT_LABELS = {
     "location": ["campus location", "location"],
     "teaching_language": ["taught in", "language", "languages"],
 }
+FACT_FIELD_KEYS = [
+    "tuition_amount",
+    "tuition_currency",
+    "tuition_period",
+    "tuition_text_raw",
+    "scholarships_available",
+    "duration_value",
+    "duration_unit",
+    "duration_text_raw",
+    "apply_date_text",
+    "start_date_text",
+    "city",
+    "country",
+    "teaching_language",
+]
 MONTHS = {
     "jan": 1,
     "feb": 2,
@@ -94,12 +109,12 @@ def _looks_like_facts_container(text: str) -> bool:
 def _fact_containers(soup) -> list[Any]:
     selectors = [
         '[data-testid*="fact" i]',
+        '[data-testid*="summary" i]',
+        '[data-testid*="key-info" i]',
         '[class*="fact" i]',
+        '[class*="summary" i]',
         '[class*="key-info" i]',
-        '[class*="overview" i]',
         'aside',
-        'section',
-        'article',
         'dl',
     ]
     containers: list[Any] = []
@@ -122,49 +137,78 @@ def _fact_containers(soup) -> list[Any]:
 
 def _split_label_value(text: str) -> tuple[str, str] | None:
     cleaned = clean_text(text) or ""
-    match = re.match(r"^([A-Za-z][A-Za-z ]{1,40})\s*:?\s+(.+)$", cleaned)
-    if not match:
+    if _label_key(cleaned):
         return None
-    return match.group(1).strip().lower(), match.group(2).strip()
+    for key, labels in FACT_LABELS.items():
+        for label in sorted(labels, key=len, reverse=True):
+            match = re.match(rf"^({re.escape(label)})\s*:?\s+(.+)$", cleaned, re.I)
+            if match:
+                value = clean_text(match.group(2))
+                return key, value or ""
+    return None
+
+
+def _label_key(text: str | None) -> str | None:
+    label_norm = (clean_text(text) or "").lower().rstrip(":")
+    if not label_norm:
+        return None
+    for key, labels in FACT_LABELS.items():
+        if any(label_norm == candidate for candidate in labels):
+            return key
+    return None
+
+
+def _fact_lines(container) -> list[str]:
+    """Return visible fact-card lines without using whole-page text fallback."""
+    raw_lines = container.get_text("\n") if hasattr(container, "get_text") else ""
+    lines = []
+    for raw in raw_lines.splitlines():
+        line = clean_text(raw)
+        if not line or line in {":", "-", "—", "|"}:
+            continue
+        lines.append(line.strip(" :-"))
+    return [line for line in lines if line]
 
 
 def _facts_from_container(container) -> dict[str, str | None]:
     facts: dict[str, str | None] = {}
-    nodes = container.select("dt, dd, li, p, div, span") if hasattr(container, "select") else []
-
-    # Definition-list pass: dt label followed by dd value.
-    for dt in container.select("dt") if hasattr(container, "select") else []:
-        label = clean_text(dt.get_text(" ")) or ""
-        dd = dt.find_next_sibling("dd")
-        value = clean_text(dd.get_text(" ")) if dd else None
-        _assign_fact(facts, label, value)
-
-    for node in nodes:
-        text = clean_text(node.get_text(" ")) or ""
-        if re.search(r"\bscholarships?\s+available\b", text, re.I):
-            facts.setdefault("scholarship", text)
-        split = _split_label_value(text)
-        if split:
-            label, value = split
-            _assign_fact(facts, label, value)
+    lines = _fact_lines(container)
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if re.fullmatch(r"scholarships?\s+available", line, re.I):
+            facts.setdefault("scholarship", line)
+            index += 1
             continue
-        aria = clean_text(node.get("aria-label")) if hasattr(node, "get") else None
-        if aria:
-            split = _split_label_value(aria)
-            if split:
-                label, value = split
-                _assign_fact(facts, label, value)
+
+        split = _split_label_value(line)
+        if split:
+            key, value = split
+            if value and not _label_key(value):
+                facts.setdefault(key, value)
+                index += 1
+                continue
+
+        key = _label_key(line)
+        if key:
+            next_index = index + 1
+            while next_index < len(lines):
+                candidate = lines[next_index]
+                if re.fullmatch(r"scholarships?\s+available", candidate, re.I):
+                    facts.setdefault("scholarship", candidate)
+                    next_index += 1
+                    continue
+                if _label_key(candidate):
+                    break
+                candidate_split = _split_label_value(candidate)
+                if candidate_split:
+                    break
+                facts.setdefault(key, candidate)
+                break
+            index = next_index if next_index > index + 1 else index + 1
+            continue
+        index += 1
     return facts
-
-
-def _assign_fact(facts: dict[str, str | None], label: str, value: str | None) -> None:
-    label_norm = (clean_text(label) or "").lower().rstrip(":")
-    if not value:
-        return
-    for key, labels in FACT_LABELS.items():
-        if any(candidate == label_norm or candidate in label_norm for candidate in labels):
-            facts.setdefault(key, clean_text(value))
-            return
 
 
 def _first_fact_map(soup) -> dict[str, str | None]:
@@ -172,7 +216,40 @@ def _first_fact_map(soup) -> dict[str, str | None]:
     for container in _fact_containers(soup):
         for key, value in _facts_from_container(container).items():
             merged.setdefault(key, value)
+        if merged:
+            break
     return merged
+
+
+def parse_facts_summary(html: str) -> dict[str, Any]:
+    """Parse programme top facts summary fields from a scoped facts-card DOM only."""
+    soup = soupify(html)
+    facts = _first_fact_map(soup)
+    tuition = parse_tuition_fact(facts.get("tuition"))
+    duration = parse_duration_fact(facts.get("duration"))
+    apply_date = parse_apply_date_fact(facts.get("apply_date"))
+    start_date = parse_start_date_fact(facts.get("start_date"))
+    location = parse_location_fact(facts.get("location"))
+    teaching_language = parse_teaching_language_fact(facts.get("teaching_language"))
+    scholarships_available = parse_scholarship_fact(facts.get("scholarship"))
+    summary = {
+        "tuition_amount": tuition["amount"],
+        "tuition_currency": tuition["currency"],
+        "tuition_period": tuition["period"],
+        "tuition_text_raw": tuition["raw"],
+        "scholarships_available": 1 if scholarships_available is True else None,
+        "duration_value": duration["value"],
+        "duration_unit": duration["unit"],
+        "duration_text_raw": duration["raw"],
+        "apply_date_text": apply_date,
+        "start_date_text": start_date,
+        "city": location["city"],
+        "country": location["country"],
+        "teaching_language": teaching_language,
+        "_raw_facts": facts,
+    }
+    logger.info("Programme facts summary parsed: {}", {key: summary.get(key) for key in FACT_FIELD_KEYS})
+    return summary
 
 
 def _extract_section_text(soup, heading_patterns: list[str]) -> str | None:
@@ -213,15 +290,9 @@ def _parse_month_year(value: str | None) -> tuple[int | None, int | None]:
 
 def parse_programme_detail(html: str, page_url: str) -> dict[str, Any]:
     soup = soupify(html)
-    facts = _first_fact_map(soup)
-
-    tuition = parse_tuition_fact(facts.get("tuition"))
-    duration = parse_duration_fact(facts.get("duration"))
-    apply_date = parse_apply_date_fact(facts.get("apply_date"))
-    start_date = parse_start_date_fact(facts.get("start_date"))
-    location = parse_location_fact(facts.get("location"))
-    teaching_language = parse_teaching_language_fact(facts.get("teaching_language"))
-    scholarships_available = parse_scholarship_fact(facts.get("scholarship"))
+    facts_summary = parse_facts_summary(html)
+    facts = facts_summary.pop("_raw_facts")
+    start_date = facts_summary.get("start_date_text")
     intake_year, intake_month = _parse_month_year(start_date)
 
     overview = _extract_section_text(soup, [r"overview", r"about"])
@@ -246,21 +317,7 @@ def parse_programme_detail(html: str, page_url: str) -> dict[str, Any]:
             )
 
     record = {
-        "programme": {
-            "tuition_amount": tuition["amount"],
-            "tuition_currency": tuition["currency"],
-            "tuition_period": tuition["period"],
-            "tuition_text_raw": tuition["raw"],
-            "duration_value": duration["value"],
-            "duration_unit": duration["unit"],
-            "duration_text_raw": duration["raw"],
-            "apply_date_text": apply_date,
-            "start_date_text": start_date,
-            "city": location["city"],
-            "country": location["country"],
-            "teaching_language": teaching_language,
-            "scholarships_available": 1 if scholarships_available is True else None,
-        },
+        "programme": facts_summary,
         "detail": {
             "overview": overview,
             "description": description,
@@ -275,14 +332,14 @@ def parse_programme_detail(html: str, page_url: str) -> dict[str, Any]:
         },
         "intake": {
             "intake_date_text": start_date,
-            "apply_date_text": apply_date,
+            "apply_date_text": facts_summary.get("apply_date_text"),
             "start_date_text": start_date,
             "intake_year": intake_year,
             "intake_month": intake_month,
             "source_url": page_url,
         },
         "language_requirement": {
-            "teaching_language": teaching_language,
+            "teaching_language": facts_summary.get("teaching_language"),
             "raw_text": facts.get("teaching_language"),
             "source_url": page_url,
         },

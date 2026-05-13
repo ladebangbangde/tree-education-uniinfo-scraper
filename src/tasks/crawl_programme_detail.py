@@ -23,18 +23,27 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+FACT_PROGRAMME_FIELDS = (
+    "tuition_amount",
+    "tuition_currency",
+    "tuition_period",
+    "tuition_text_raw",
+    "scholarships_available",
+    "duration_value",
+    "duration_unit",
+    "duration_text_raw",
+    "apply_date_text",
+    "start_date_text",
+    "city",
+    "country",
+    "teaching_language",
+)
+
+
 def _safe_programme_updates(parsed: dict, source_hash: str, crawled_at: datetime) -> dict:
-    data = {key: value for key, value in parsed.items() if value is not None}
-    # Detail-only scalar fields should reflect the latest visible detail page,
-    # including NULL when a fact is absent. Older list-page fields are only
-    # overwritten when the detail parser has a concrete value.
-    for nullable_detail_field in (
-        "scholarships_available",
-        "apply_date_text",
-        "start_date_text",
-        "teaching_language",
-    ):
-        data[nullable_detail_field] = parsed.get(nullable_detail_field)
+    # The top facts card is the authority for these detail facts. Persist NULL
+    # for missing facts instead of preserving stale values from earlier crawls.
+    data = {field: parsed.get(field) for field in FACT_PROGRAMME_FIELDS}
     data["detail_crawled_at"] = crawled_at
     data["detail_source_hash"] = source_hash
     return data
@@ -93,6 +102,7 @@ def crawl_programme_detail(programme_id: int) -> bool:
                 upsert_application_requirement(session, requirement)
 
         programme_fields = parsed["programme"]
+        logger.info("Facts summary parsed for programme_id={}: {}", programme_id, programme_fields)
         tuition = (
             f"{programme_fields.get('tuition_amount')} {programme_fields.get('tuition_currency')}/"
             f"{programme_fields.get('tuition_period')}"
