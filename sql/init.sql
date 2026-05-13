@@ -76,6 +76,12 @@ CREATE TABLE IF NOT EXISTS programme (
   country VARCHAR(128),
   is_featured TINYINT,
   tuition_text_raw VARCHAR(255),
+  scholarships_available TINYINT NULL,
+  apply_date_text VARCHAR(128) NULL,
+  start_date_text VARCHAR(128) NULL,
+  teaching_language VARCHAR(128) NULL,
+  detail_crawled_at DATETIME NULL,
+  detail_source_hash VARCHAR(64) NULL,
   duration_text_raw VARCHAR(255),
   last_crawled_at DATETIME,
   source_hash VARCHAR(64),
@@ -83,6 +89,76 @@ CREATE TABLE IF NOT EXISTS programme (
   updated_at DATETIME,
   UNIQUE KEY uq_programme_source (university_id, source_programme_id),
   CONSTRAINT fk_programme_university FOREIGN KEY (university_id) REFERENCES university(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS programme_detail (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  programme_id BIGINT NOT NULL,
+  overview TEXT NULL,
+  description TEXT NULL,
+  career_opportunities TEXT NULL,
+  academic_requirements TEXT NULL,
+  english_requirements TEXT NULL,
+  other_requirements TEXT NULL,
+  application_deadline_text VARCHAR(255) NULL,
+  application_url VARCHAR(1024) NULL,
+  official_programme_url VARCHAR(1024) NULL,
+  source_url VARCHAR(1024) NULL,
+  source_hash VARCHAR(64) NULL,
+  last_crawled_at DATETIME NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  UNIQUE KEY uk_programme_detail_programme_id (programme_id),
+  CONSTRAINT fk_programme_detail_programme FOREIGN KEY (programme_id) REFERENCES programme(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS programme_intake (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  programme_id BIGINT NOT NULL,
+  intake_date_text VARCHAR(128) NULL,
+  apply_date_text VARCHAR(128) NULL,
+  start_date_text VARCHAR(128) NULL,
+  intake_year INT NULL,
+  intake_month INT NULL,
+  source_url VARCHAR(1024) NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  UNIQUE KEY uk_programme_intake (programme_id, apply_date_text, start_date_text),
+  CONSTRAINT fk_programme_intake_programme FOREIGN KEY (programme_id) REFERENCES programme(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS programme_language_requirement (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  programme_id BIGINT NOT NULL,
+  teaching_language VARCHAR(128) NULL,
+  ielts_overall DECIMAL(3,1) NULL,
+  ielts_listening DECIMAL(3,1) NULL,
+  ielts_reading DECIMAL(3,1) NULL,
+  ielts_writing DECIMAL(3,1) NULL,
+  ielts_speaking DECIMAL(3,1) NULL,
+  toefl_overall INT NULL,
+  pte_overall INT NULL,
+  raw_text TEXT NULL,
+  source_url VARCHAR(1024) NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  UNIQUE KEY uk_programme_language_programme_id (programme_id),
+  CONSTRAINT fk_programme_language_programme FOREIGN KEY (programme_id) REFERENCES programme(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS programme_application_requirement (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  programme_id BIGINT NOT NULL,
+  requirement_type VARCHAR(128) NULL,
+  title VARCHAR(255) NULL,
+  raw_text TEXT NULL,
+  normalized_text TEXT NULL,
+  source_url VARCHAR(1024) NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  KEY idx_programme_requirement_programme_id (programme_id),
+  CONSTRAINT fk_programme_requirement_programme FOREIGN KEY (programme_id) REFERENCES programme(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS university_ranking (
