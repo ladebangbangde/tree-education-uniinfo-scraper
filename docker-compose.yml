@@ -1,5 +1,7 @@
 services:
   mysql:
+    profiles:
+      - local-mysql
     image: mysql:8.0
     container_name: uniinfo-mysql
     restart: unless-stopped
@@ -27,9 +29,6 @@ services:
     container_name: uniinfo-scraper
     env_file:
       - .env
-    depends_on:
-      mysql:
-        condition: service_healthy
     volumes:
       - ./data:/app/data
     command: python -m src.main --help
