@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import datetime
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..db import Base
 
@@ -25,9 +25,19 @@ class Programme(Base):
     country: Mapped[str | None] = mapped_column(String(128))
     is_featured: Mapped[int | None] = mapped_column(Integer)
     tuition_text_raw: Mapped[str | None] = mapped_column(String(255))
+    scholarships_available: Mapped[int | None] = mapped_column(SmallInteger)
+    apply_date_text: Mapped[str | None] = mapped_column(String(128))
+    start_date_text: Mapped[str | None] = mapped_column(String(128))
+    teaching_language: Mapped[str | None] = mapped_column(String(128))
+    detail_crawled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    detail_source_hash: Mapped[str | None] = mapped_column(String(64))
     duration_text_raw: Mapped[str | None] = mapped_column(String(255))
     last_crawled_at: Mapped[datetime | None] = mapped_column(DateTime)
     source_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
     university = relationship("University", back_populates="programmes")
+    detail = relationship("ProgrammeDetail", back_populates="programme", uselist=False, cascade="all, delete-orphan")
+    intakes = relationship("ProgrammeIntake", back_populates="programme", cascade="all, delete-orphan")
+    language_requirement = relationship("ProgrammeLanguageRequirement", back_populates="programme", uselist=False, cascade="all, delete-orphan")
+    application_requirements = relationship("ProgrammeApplicationRequirement", back_populates="programme", cascade="all, delete-orphan")
