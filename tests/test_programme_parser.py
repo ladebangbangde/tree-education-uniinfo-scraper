@@ -17,7 +17,7 @@ PROGRAMME_LIST_HTML = """
         <span data-testid="delivery">On campus</span>
         <span data-testid="tuition">280,343 CNY / year</span>
         <span data-testid="duration">3 years</span>
-        <span data-testid="location">Bath, United Kingdom</span>
+        <span data-testid="location">University of Bath Bath, United Kingdom</span>
         <span>Featured</span>
         <span>University of Bath</span>
       </article>
@@ -40,7 +40,11 @@ PROGRAMME_LIST_HTML = """
 
 class ProgrammeParserTest(unittest.TestCase):
     def test_programme_name_is_clean_title_only(self):
-        records = parse(PROGRAMME_LIST_HTML, "https://www.bachelorsportal.com/universities/1/example/programmes")
+        records = parse(
+            PROGRAMME_LIST_HTML,
+            "https://www.bachelorsportal.com/universities/1/example/programmes",
+            university_name="University of Bath",
+        )
 
         self.assertEqual(len(records), 2)
         first = records[0]
@@ -52,7 +56,11 @@ class ProgrammeParserTest(unittest.TestCase):
         self.assertNotIn("University of Bath", first["name"])
 
     def test_programme_fields_are_extracted_from_card(self):
-        records = parse(PROGRAMME_LIST_HTML, "https://www.bachelorsportal.com/universities/1/example/programmes")
+        records = parse(
+            PROGRAMME_LIST_HTML,
+            "https://www.bachelorsportal.com/universities/1/example/programmes",
+            university_name="University of Bath",
+        )
 
         first = records[0]
         self.assertEqual(first["degree_type"], "Bachelor")
@@ -64,6 +72,7 @@ class ProgrammeParserTest(unittest.TestCase):
         self.assertEqual(first["duration_value"], 3)
         self.assertEqual(first["duration_unit"], "year")
         self.assertEqual(first["city"], "Bath")
+        self.assertNotIn("University of Bath", first["city"])
         self.assertEqual(first["country"], "United Kingdom")
         self.assertEqual(first["is_featured"], 1)
 

@@ -15,13 +15,14 @@ def crawl_programmes(university_id: int, limit: int = 20) -> int:
         if not university or not university.source_url:
             raise ValueError(f"University {university_id} not found or missing source_url")
         url = build_programmes_url(university.source_url)
+        university_name = university.name
     with BrowserClient() as browser:
         result = browser.fetch(url)
     if result is None:
         return 0
     source_hash, path = save_html_snapshot(result.html, settings.source_site)
     logger.info(f"Saved snapshot {path}")
-    records = parse(result.html, result.final_url)[:limit]
+    records = parse(result.html, result.final_url, university_name=university_name)[:limit]
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with session_scope() as session:
         for record in records:

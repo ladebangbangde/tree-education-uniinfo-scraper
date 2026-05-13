@@ -152,17 +152,29 @@ def _duration_text(text: str) -> str | None:
     return clean_text(match.group(0)) if match else None
 
 
-def _location_text(card, text: str) -> str | None:
+def _location_text(card, text: str, university_name: str | None = None) -> str | None:
     selector_location = _first_text(card, LOCATION_SELECTORS)
     if selector_location:
-        return selector_location
-    match = LOCATION_PATTERN.search(text)
+        return _strip_university_prefix(selector_location, university_name)
+    match = LOCATION_PATTERN.search(_strip_university_prefix(text, university_name) or text)
     if match:
         return f"{match.group(1)}, {match.group(2)}"
     return None
 
 
-def _location_parts(location: str | None) -> tuple[str | None, str | None]:
+def _strip_university_prefix(location: str | None, university_name: str | None = None) -> str | None:
+    location_text = clean_text(location)
+    university_text = clean_text(university_name)
+    if not location_text or not university_text:
+        return location_text
+    if location_text.lower().startswith(university_text.lower()):
+        stripped = location_text[len(university_text) :].strip(" ,-–—|•")
+        return stripped or location_text
+    return location_text
+
+
+def _location_parts(location: str | None, university_name: str | None = None) -> tuple[str | None, str | None]:
+    location = _strip_university_prefix(location, university_name)
     if not location:
         return None, None
     parts = [part.strip() for part in location.split(",") if part.strip()]
@@ -176,7 +188,7 @@ def _location_parts(location: str | None) -> tuple[str | None, str | None]:
     return None, None
 
 
-def parse_programmes(html: str, page_url: str) -> list[dict]:
+def parse_programmes(html: str, page_url: str, university_name: str | None = None) -> list[dict]:
     soup = soupify(html)
     records = []
     seen: set[str] = set()
@@ -198,8 +210,8 @@ def parse_programmes(html: str, page_url: str) -> list[dict]:
         tuition_raw = _tuition_text(text)
         duration = normalize_duration(duration_raw)
         tuition = normalize_tuition(tuition_raw)
-        location_raw = _location_text(card, text)
-        city, country = _location_parts(location_raw)
+        location_raw = _location_text(card, text, university_name=university_name)
+        city, country = _location_parts(location_raw, university_name=university_name)
         record = {
             "source_programme_id": source_id_from_url(url),
             "source_url": url,

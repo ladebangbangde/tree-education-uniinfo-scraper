@@ -675,7 +675,7 @@ def parse_content_sections(soup, source_url: str) -> list[dict]:
     return sections
 
 
-def parse_programmes(html: str, page_url: str) -> list[dict]:
+def parse_programmes(html: str, page_url: str, university_name: str | None = None) -> list[dict]:
     from .programme_parser import parse_programmes as _parse_programmes
 
-    return _parse_programmes(html, page_url)
+    return _parse_programmes(html, page_url, university_name=university_name)
