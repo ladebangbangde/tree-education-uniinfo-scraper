@@ -8,3 +8,4 @@ tenacity
 typer
 requests
 urllib3
+lxml
