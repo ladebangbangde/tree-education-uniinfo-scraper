@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ..models import (
     University, Programme, UniversityStatistics, UniversityContentSection,
     UniversityRanking, Scholarship, CampusLocation, UniversityReviewSummary,
+    ProgrammeDetail, ProgrammeIntake, ProgrammeLanguageRequirement, ProgrammeApplicationRequirement,
 )
 
 
@@ -78,3 +79,19 @@ def upsert_campus(session: Session, data: dict):
 
 def upsert_review_summary(session: Session, data: dict):
     return upsert_by_unique(session, UniversityReviewSummary, data, ["university_id"])
+
+
+def upsert_programme_detail(session: Session, data: dict):
+    return upsert_by_unique(session, ProgrammeDetail, data, ["programme_id"])
+
+
+def upsert_programme_intake(session: Session, data: dict):
+    return upsert_by_unique(session, ProgrammeIntake, data, ["programme_id", "apply_date_text", "start_date_text"])
+
+
+def upsert_language_requirement(session: Session, data: dict):
+    return upsert_by_unique(session, ProgrammeLanguageRequirement, data, ["programme_id"])
+
+
+def upsert_application_requirement(session: Session, data: dict):
+    return upsert_by_unique(session, ProgrammeApplicationRequirement, data, ["programme_id", "requirement_type", "title"])
