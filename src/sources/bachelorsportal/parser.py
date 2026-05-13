@@ -13,7 +13,7 @@ import importlib.util
 import json
 import re
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 if importlib.util.find_spec("bs4"):
     from bs4 import BeautifulSoup
@@ -75,21 +75,59 @@ def _first_text(node, selectors: list[str]) -> str | None:
     return None
 
 
+def _canonical_university_url(url: str) -> str:
+    """Keep university source URLs on Bachelorsportal even after redirects.
+
+    Studyportals currently redirects the public Bachelorsportal university search to
+    Mastersportal, and the rendered card hrefs may also use that host. The source
+    site for this crawler remains Bachelorsportal, so university detail URLs are
+    canonicalised back to `www.bachelorsportal.com` while preserving the stable
+    `/universities/<id>/...` path used by all Studyportals verticals.
+    """
+    parsed = urlparse(url)
+    if re.search(r"/(?:universities|university)/", parsed.path):
+        return urlunparse(("https", "www.bachelorsportal.com", parsed.path, "", "", ""))
+    return url
+
+
 def _absolute(href: str | None, base_url: str = BASE_URL) -> str | None:
     if not href:
         return None
-    return urljoin(base_url, href)
+    return _canonical_university_url(urljoin(base_url or BASE_URL, href))
 
 
-def _location_parts(location: str | None) -> tuple[str | None, str | None]:
+def _country_from_page_url(page_url: str | None) -> str | None:
+    if not page_url:
+        return None
+    slug = urlparse(page_url).path.rstrip("/").split("/")[-1]
+    known = {
+        "united-kingdom": "United Kingdom",
+        "united-states": "United States",
+        "australia": "Australia",
+        "germany": "Germany",
+        "canada": "Canada",
+        "netherlands": "Netherlands",
+        "ireland": "Ireland",
+        "france": "France",
+    }
+    return known.get(slug)
+
+
+def _location_parts(location: str | None, fallback_country: str | None = None) -> tuple[str | None, str | None]:
     if not location:
-        return None, None
+        return None, fallback_country
+    location = clean_text(location) or ""
+    if re.fullmatch(r"multiple locations?", location, re.I):
+        return None, fallback_country
     parts = [part.strip() for part in location.split(",") if part.strip()]
     if len(parts) >= 2:
-        return parts[0], parts[-1]
+        country = parts[-1]
+        if country in {"England", "Scotland", "Wales", "Northern Ireland"}:
+            country = "United Kingdom"
+        return parts[0], country
     if location in {"United Kingdom", "England", "Scotland", "Wales", "Northern Ireland"}:
         return None, "United Kingdom" if location != "United Kingdom" else location
-    return None, location
+    return None, fallback_country or location
 
 
 def _location_from_text(text: str) -> str | None:
@@ -142,12 +180,14 @@ def _programme_count_from_text(text: str) -> int | None:
 
 def _count_near_label(text: str, label: str) -> int | None:
     escaped = re.escape(label)
-    before_label = rf"(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\s+{escaped}s?\b"
-    after_label = rf"{escaped}s?\s*:?\s*(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\b"
-    # Bachelorsportal cards commonly show either "125 Bachelors" or
-    # "Bachelors 42". Scholarship counts are sometimes adjacent to bachelor
-    # counts ("Bachelors 42 Scholarships 7"), so prefer the label-before form
-    # for scholarships to avoid accidentally taking the bachelor value.
+    label_pattern = rf"{escaped}(?:'s|s)?"
+    before_label = rf"(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\s+{label_pattern}\b"
+    after_label = rf"{label_pattern}\s*:?\s*(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\b"
+    # Bachelorsportal cards commonly show either "125 Bachelors",
+    # "Bachelor's 42", or "Bachelors 42". Scholarship counts are sometimes
+    # adjacent to bachelor counts ("Bachelors 42 Scholarships 7"), so prefer
+    # the label-before form for scholarships to avoid accidentally taking the
+    # bachelor value.
     patterns = [before_label, after_label] if label.lower().startswith("bachelor") else [after_label, before_label]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
@@ -155,11 +195,11 @@ def _count_near_label(text: str, label: str) -> int | None:
             return normalize_count(match.group(1))
     return None
 
-
 def _rating_from_text(text: str) -> Any:
     patterns = [
         r"(?:Rating|Rated)\s*:?\s*(\d(?:\.\d+)?)",
         r"(\d(?:\.\d+)?)\s*/\s*5",
+        r"\b([1-5](?:\.\d+)?)\s*\(\d[\d,]*\)",
         r"\b(\d\.\d)\b",
     ]
     for pattern in patterns:
@@ -182,12 +222,13 @@ def _review_count_from_text(text: str) -> int | None:
     return None
 
 
-def _record_from_values(*, url: str, name: str | None, text: str, location: str | None) -> dict | None:
+def _record_from_values(*, url: str, name: str | None, text: str, location: str | None, fallback_country: str | None = None) -> dict | None:
     source_id = source_id_from_url(url)
     clean_name = clean_text(name)
     if not url or not source_id or not clean_name:
         return None
-    city, country = _location_parts(location)
+    url = _canonical_university_url(url)
+    city, country = _location_parts(location, fallback_country=fallback_country)
     institution_type_match = re.search(r"\b(Private|Public)\s+(?:University|Institution)\b", text, re.I)
     return {
         "source_site": SOURCE_SITE,
@@ -209,46 +250,180 @@ def _record_from_values(*, url: str, name: str | None, text: str, location: str 
     }
 
 
-def _records_from_json(value: Any, page_url: str) -> list[dict]:
+def _find_first_by_key(value: Any, key_patterns: tuple[str, ...]) -> Any:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if any(pattern in normalized for pattern in key_patterns) and item not in (None, ""):
+                if not isinstance(item, (dict, list)):
+                    return item
+                nested = _find_first_by_key(item, key_patterns)
+                if nested not in (None, ""):
+                    return nested
+        for item in value.values():
+            found = _find_first_by_key(item, key_patterns)
+            if found not in (None, ""):
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_first_by_key(item, key_patterns)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def _numeric_from_json(value: Any, key_patterns: tuple[str, ...]) -> int | None:
+    found = _find_first_by_key(value, key_patterns)
+    if found in (None, ""):
+        return None
+    return normalize_count(str(found))
+
+
+def _rating_from_json(value: Any) -> Any:
+    found = _find_first_by_key(value, ("ratingvalue", "rating", "score"))
+    if found in (None, ""):
+        return None
+    return normalize_rating(str(found))
+
+
+def _records_from_json(value: Any, page_url: str, fallback_country: str | None = None) -> list[dict]:
     records: list[dict] = []
     if isinstance(value, dict):
-        possible_url = value.get("url") or value.get("sameAs") or value.get("source_url")
-        possible_name = value.get("name") or value.get("title")
-        if possible_url and possible_name and "universit" in str(possible_url):
+        possible_url = (
+            value.get("url")
+            or value.get("href")
+            or value.get("link")
+            or value.get("path")
+            or value.get("sameAs")
+            or value.get("source_url")
+            or value.get("sourceUrl")
+        )
+        possible_name = value.get("name") or value.get("title") or value.get("displayName")
+        if possible_url and possible_name and re.search(r"/(?:universities|university)/", str(possible_url)):
             url = _absolute(str(possible_url), page_url)
             location_value = value.get("address") or value.get("location")
             if isinstance(location_value, dict):
-                locality = location_value.get("addressLocality") or location_value.get("city")
-                country = location_value.get("addressCountry") or location_value.get("country")
+                locality = location_value.get("addressLocality") or location_value.get("city") or location_value.get("name")
+                country = location_value.get("addressCountry") or location_value.get("country") or fallback_country
                 location = ", ".join(str(part) for part in [locality, country] if part)
             else:
-                location = clean_text(str(location_value)) if location_value else None
+                city = value.get("city") or value.get("locality")
+                country = value.get("country") or fallback_country
+                location = clean_text(str(location_value)) if location_value else ", ".join(str(part) for part in [city, country] if part)
             text = clean_text(json.dumps(value, ensure_ascii=False)) or ""
-            record = _record_from_values(url=url, name=str(possible_name), text=text, location=location)
+            record = _record_from_values(
+                url=url,
+                name=str(possible_name),
+                text=text,
+                location=location,
+                fallback_country=fallback_country,
+            )
             if record:
+                record["bachelor_count"] = record["bachelor_count"] or _numeric_from_json(value, ("bachelor", "programme", "program"))
+                record["scholarship_count"] = record["scholarship_count"] or _numeric_from_json(value, ("scholarship",))
+                record["review_count"] = record["review_count"] or _numeric_from_json(value, ("reviewcount", "reviewscount", "reviews"))
+                record["rating"] = record["rating"] or _rating_from_json(value)
                 records.append(record)
         for item in value.values():
-            records.extend(_records_from_json(item, page_url))
+            records.extend(_records_from_json(item, page_url, fallback_country=fallback_country))
     elif isinstance(value, list):
         for item in value:
-            records.extend(_records_from_json(item, page_url))
+            records.extend(_records_from_json(item, page_url, fallback_country=fallback_country))
     return records
+
+
+def _script_json_values(html: str) -> list[Any]:
+    values: list[Any] = []
+    for match in re.finditer(r"<script\b(?P<attrs>[^>]*)>(?P<body>.*?)</script>", html, re.I | re.S):
+        attrs = match.group("attrs") or ""
+        body = html_lib.unescape(match.group("body")).strip()
+        if not body:
+            continue
+        is_json_script = re.search(r"type=[\"']application/(?:ld\+)?json[\"']", attrs, re.I) or re.search(
+            r"id=[\"']__NEXT_DATA__[\"']", attrs, re.I
+        )
+        candidates = [body] if is_json_script else []
+        if not is_json_script:
+            for assignment in re.finditer(r"(?:__NUXT__|__NEXT_DATA__|window\.__INITIAL_STATE__)\s*=\s*({.*?})\s*;", body, re.S):
+                candidates.append(assignment.group(1))
+        for candidate in candidates:
+            try:
+                values.append(json.loads(candidate))
+            except json.JSONDecodeError:
+                continue
+    return values
+
+
+
+def _dedupe_records(records: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for record in records:
+        key = _record_key(record)
+        if not key or key in seen:
+            continue
+        deduped.append(record)
+        seen.add(key)
+    return deduped
+
+
+def _record_key(record: dict) -> str | None:
+    return record.get("source_url") or record.get("source_university_id")
+
+
+def _merge_record_fields(base: dict, update: dict) -> bool:
+    """Fill missing parser fields in `base` from another extraction strategy."""
+    changed = False
+    for key, value in update.items():
+        if value in (None, ""):
+            continue
+        if base.get(key) in (None, ""):
+            base[key] = value
+            changed = True
+    return changed
+
+
+def _upsert_parsed_record(records: list[dict], index: dict[str, dict], record: dict) -> tuple[bool, bool]:
+    key = _record_key(record)
+    if not key:
+        return False, False
+    existing = index.get(key)
+    if existing is None:
+        records.append(record)
+        index[key] = record
+        return True, False
+    return False, _merge_record_fields(existing, record)
+
+
+def _log_parse_summary(records: list[dict]) -> None:
+    missing = _missing_field_stats(records)
+    logger.info(
+        "University list parser debug: parsed_count={}, missing_city_count={}, "
+        "missing_bachelor_count={}, missing_scholarship_count={}, missing_review_count={}",
+        len(records),
+        missing["city"],
+        missing["bachelor_count"],
+        missing["scholarship_count"],
+        missing["review_count"],
+    )
 
 
 def _parse_structured_records(html: str, page_url: str) -> list[dict]:
     records: list[dict] = []
-    for match in re.finditer(r"<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>", html, re.I | re.S):
-        try:
-            value = json.loads(html_lib.unescape(match.group(1)).strip())
-        except json.JSONDecodeError:
-            continue
-        records.extend(_records_from_json(value, page_url))
+    fallback_country = _country_from_page_url(page_url)
+    json_values = _script_json_values(html)
+    logger.info("University list parser: found {} JSON/hydration script payload(s)", len(json_values))
+    for value in json_values:
+        records.extend(_records_from_json(value, page_url, fallback_country=fallback_country))
+    records = _dedupe_records(records)
+    logger.info("University list parser: extracted {} record(s) from JSON/hydration data", len(records))
     return records
 
 
 def _parse_university_cards_regex(html: str, page_url: str) -> list[dict]:
     records: list[dict] = []
     seen: set[str] = set()
+    fallback_country = _country_from_page_url(page_url)
     anchor_pattern = re.compile(r"<a\b(?P<attrs>[^>]*href=[\"'][^\"']*(?:/universities/|/university/)[^\"']*[\"'][^>]*)>(?P<body>.*?)</a>", re.I | re.S)
     for match in anchor_pattern.finditer(html):
         href_match = re.search(r"href=[\"']([^\"']+)[\"']", match.group("attrs"), re.I)
@@ -275,75 +450,146 @@ def _parse_university_cards_regex(html: str, page_url: str) -> list[dict]:
         name = _name_from_card_text(match.group("body"))
         location_match = re.search(r"(?:data-testid=[\"']location[\"'][^>]*>|class=[\"'][^\"']*location[^\"']*[\"'][^>]*>)(.*?)<", card_html, re.I | re.S)
         location = clean_text(location_match.group(1)) if location_match else _location_from_text(text)
-        record = _record_from_values(url=url, name=name, text=text, location=location)
+        record = _record_from_values(url=url, name=name, text=text, location=location, fallback_country=fallback_country)
         if record:
             records.append(record)
             seen.add(url)
     return records
 
 
+def _card_node_for_link(link):
+    """Find the smallest semantic card container for a university link."""
+    best = link
+    for parent in link.parents:
+        if getattr(parent, "name", None) in {"html", "body", "main"}:
+            break
+        text = clean_text(parent.get_text(" ")) or ""
+        has_card_metrics = re.search(r"\bLocation\b", text, re.I) and re.search(
+            r"\b(?:Bachelors?|Masters?|Scholarships?|reviews?)\b", text, re.I
+        )
+        if has_card_metrics:
+            return parent
+        best = parent
+    return best
+
+
 def _university_card_nodes(soup) -> list:
     """Return likely university result containers without depending on one CSS class."""
+    links = soup.select('a[href*="/universities/"], a[href*="/university/"]')
+    nodes = [_card_node_for_link(link) for link in links]
+    if nodes:
+        logger.info("University list parser: using link-centric card extraction for {} university link(s)", len(links))
+        return nodes
+
     selectors = [
         '[data-testid*="university" i]',
         '[data-testid*="search-result" i]',
-        'article',
-        'li',
-        'div.SearchResultItem',
-        'div[class*="SearchResult"]',
-        'div[class*="University"]',
-        'div[class*="Card"]',
-        'div[class*="Result"]',
+        "article",
+        "li",
+        '[role="listitem"]',
     ]
-    nodes = list(soup.select(", ".join(selectors)))
-    for link in soup.select('a[href*="/universities/"], a[href*="/university/"]'):
-        parent = link.find_parent(["article", "li", "section", "div"])
-        if parent is not None:
-            nodes.append(parent)
-    return nodes
+    logger.info("University list parser: link-centric extraction found no links; trying semantic selector fallback")
+    return list(soup.select(", ".join(selectors)))
+
+
+def _missing_field_stats(records: list[dict]) -> dict[str, int]:
+    fields = [
+        "name",
+        "source_url",
+        "country",
+        "city",
+        "rating",
+        "review_count",
+        "bachelor_count",
+        "scholarship_count",
+    ]
+    return {field: sum(1 for record in records if record.get(field) in (None, "")) for field in fields}
 
 
 def parse_university_cards(html: str, page_url: str) -> list[dict]:
     """Parse university search cards and require non-empty identity fields."""
     records = _parse_structured_records(html, page_url)
-    seen = {record["source_url"] for record in records}
+    index = {record["source_url"]: record for record in records}
+    fallback_country = _country_from_page_url(page_url)
+
+    if records:
+        logger.info("University list parser: JSON/hydration extraction produced {} unique university record(s)", len(records))
+        logger.info("University list parser: running DOM fallback to enrich missing JSON fields")
+    else:
+        logger.info("University list parser: no JSON/hydration records found; falling back to DOM university cards")
 
     if BeautifulSoup is None:
+        logger.info("University list parser: BeautifulSoup unavailable; using regex fallback")
+        regex_added = 0
+        regex_enriched = 0
         for record in _parse_university_cards_regex(html, page_url):
-            if record["source_url"] not in seen:
-                records.append(record)
-                seen.add(record["source_url"])
+            added, enriched = _upsert_parsed_record(records, index, record)
+            regex_added += int(added)
+            regex_enriched += int(enriched)
+        logger.info("University list parser: regex fallback added={}, enriched={}", regex_added, regex_enriched)
+        _log_parse_summary(records)
         return records
 
     soup = soupify(html)
-    for node in _university_card_nodes(soup):
+    card_nodes = _university_card_nodes(soup)
+    dom_added = 0
+    dom_enriched = 0
+    for node in card_nodes:
         try:
-            link = node.select_one('a[href*="/universities/"], a[href*="/university/"]')
+            link = node.select_one('a[href*="/universities/"], a[href*="/university/"]') if hasattr(node, "select_one") else None
+            if link is None and getattr(node, "name", None) == "a":
+                link = node
             if not link:
                 continue
             url = _absolute(link.get("href"), page_url)
-            if not url or url in seen:
+            if not url:
                 continue
             text = clean_text(node.get_text(" ")) or ""
-            name = (
-                _first_text(node, ["h2", "h3", '[data-testid*="name" i]', '[data-testid*="title" i]', '[class*="Title"]', '[class*="title"]'])
-                or _name_from_card_text(link.get_text(" "))
+            selector_name = _first_text(
+                node,
+                ["h1", "h2", "h3", '[data-testid*="name" i]', '[data-testid*="title" i]'],
             )
-            location = (
-                _first_text(node, ['[data-testid*="location" i]', '[class*="Location"]', '[class*="location"]'])
-                or _location_from_text(text)
+            if selector_name:
+                name = selector_name
+            else:
+                logger.info("University list parser: name selector fallback used for url={}", url)
+                name = _name_from_card_text(link.get_text(" "))
+            selector_location = _first_text(
+                node,
+                [
+                    '[data-testid*="location" i]',
+                    '[aria-label*="location" i]',
+                    '[class*="Location"]',
+                    '[class*="location"]',
+                ],
             )
-            record = _record_from_values(url=url, name=name, text=text, location=location)
+            if selector_location:
+                location = selector_location
+            else:
+                logger.info("University list parser: location selector fallback used for url={}", url)
+                location = _location_from_text(text)
+            record = _record_from_values(
+                url=url,
+                name=name,
+                text=text,
+                location=location,
+                fallback_country=fallback_country,
+            )
             if not record:
                 logger.warning("Skipping university card with missing identity fields: url={}, name={}", url, name)
                 continue
-            record["institution_type"] = record["institution_type"] or _first_text(node, ['[data-testid*="institution" i]', '[class*="Institution"]'])
-            record["ranking_text"] = _first_text(node, ['[data-testid*="ranking" i]', '[class*="Ranking"]'])
-            record["description"] = _first_text(node, ["p", '[class*="Description"]', '[class*="description"]'])
-            records.append(record)
-            seen.add(url)
+            record["institution_type"] = record["institution_type"] or _first_text(
+                node, ['[data-testid*="institution" i]', '[aria-label*="institution" i]']
+            )
+            record["ranking_text"] = _first_text(node, ['[data-testid*="ranking" i]', '[aria-label*="ranking" i]'])
+            record["description"] = _first_text(node, ["p"])
+            added, enriched = _upsert_parsed_record(records, index, record)
+            dom_added += int(added)
+            dom_enriched += int(enriched)
         except Exception as exc:
             logger.exception("Failed to parse one university card: {}", exc)
+    logger.info("University list parser: DOM fallback added={}, enriched={}", dom_added, dom_enriched)
+    _log_parse_summary(records)
     return records
 
 
