@@ -58,7 +58,61 @@ DETAIL_TEXT_BLOCK_HTML = """
 """
 
 
+QUICK_FACT_COMPONENT_HTML = """
+<html>
+  <body>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Tuition fee</div>
+      <div class="ValueContainer"><div class="Value">24,224 USD / year</div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Duration</div>
+      <div class="ValueContainer"><div class="Value">3 years</div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Apply date</div>
+      <div class="ValueContainer"><div class="Value"><time datetime="2026-06-30">Jun 2026</time></div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Start date</div>
+      <div class="ValueContainer"><div class="Value"><time datetime="2026-09-01">Sep 2026</time></div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Campus location</div>
+      <div class="ValueContainer"><div class="Value">Portsmouth, United Kingdom</div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Taught in</div>
+      <div class="ValueContainer"><div class="Value">English</div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Scholarships available</div>
+    </div>
+  </body>
+</html>
+"""
+
+
 class ProgrammeDetailParserTest(unittest.TestCase):
+
+    def test_quick_fact_components_are_parsed(self):
+        facts = parse_facts_summary(QUICK_FACT_COMPONENT_HTML)
+
+        self.assertEqual(facts["tuition_amount"], Decimal("24224.00"))
+        self.assertEqual(facts["tuition_currency"], "USD")
+        self.assertEqual(facts["tuition_period"], "year")
+        self.assertEqual(facts["tuition_text_raw"], "24,224 USD / year")
+        self.assertEqual(facts["duration_value"], 3)
+        self.assertEqual(facts["duration_unit"], "year")
+        self.assertEqual(facts["duration_text_raw"], "3 years")
+        self.assertEqual(facts["apply_date_text"], "Jun 2026")
+        self.assertEqual(facts["start_date_text"], "Sep 2026")
+        self.assertEqual(facts["city"], "Portsmouth")
+        self.assertEqual(facts["country"], "United Kingdom")
+        self.assertEqual(facts["teaching_language"], "English")
+        self.assertEqual(facts["scholarships_available"], 1)
+        self.assertTrue(any(facts[key] is not None for key in facts if key != "_raw_facts"))
+
     def test_facts_card_example_html_is_parsed(self):
         record = parse(DETAIL_HTML, "https://www.bachelorsportal.com/studies/15/example.html")
         programme = record["programme"]

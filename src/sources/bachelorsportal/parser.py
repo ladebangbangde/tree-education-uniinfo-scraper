@@ -41,7 +41,8 @@ SECTION_TYPES = {
 def soupify(html: str):
     if BeautifulSoup is None:
         raise RuntimeError("beautifulsoup4 is required for this parser path")
-    return BeautifulSoup(html, "html.parser")
+    parser = "lxml" if importlib.util.find_spec("lxml") else "html.parser"
+    return BeautifulSoup(html, parser)
 
 
 def clean_text(value: str | None) -> str | None:
