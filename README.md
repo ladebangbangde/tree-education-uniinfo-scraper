@@ -26,9 +26,11 @@ See `docs/crawler-policy.md` for the detailed policy.
 ```text
 tree-education-uniinfo-scraper/
 ├── README.md
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
 ├── requirements.txt
 ├── .env.example
-├── docker-compose.yml
 ├── docs/
 ├── sql/
 └── src/
@@ -54,33 +56,73 @@ playwright install chromium
 cp .env.example .env
 ```
 
-## MySQL startup
+## Docker Compose startup
+
+The project includes a Docker image for the scraper. Copy `.env.example` to `.env` before running the scraper in Docker.
+
+Database configuration is split into `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. The default `.env.example` targets the remote MySQL instance at `121.41.95.26:33306`, and the `scraper` service reads these values through `env_file`. If `.env` also contains `DATABASE_URL`, that single URL takes precedence over the split settings.
 
 ```bash
-docker compose up -d mysql
+cp .env.example .env
+docker compose build scraper
+docker compose run --rm scraper python -m src.main --help
+docker compose run --rm scraper python -m src.main init-db
+docker compose run --rm scraper python -m src.main crawl-universities --country united-kingdom --limit 10
 ```
 
-Optional services are included:
+The scraper container mounts `./data` to `/app/data`, so snapshots and generated data remain available on the host.
+
+`docker-compose.yml` also keeps an optional local MySQL service for development. The scraper does not depend on it. Start it only when you intentionally want a local Compose database:
 
 ```bash
-docker compose up -d redis adminer
+docker compose --profile local-mysql up -d mysql
 ```
 
-Adminer runs on <http://localhost:8080>.
-
-Default MySQL settings:
+Optional local MySQL settings:
 
 - Database: `tree_education_uniinfo`
 - User: `tree_user`
 - Password: `tree_password`
 - Root password: `root_password`
 
+
+## PyCharm Docker / Docker Compose run configuration
+
+Use these steps to run the crawler from PyCharm on Windows with Docker Desktop instead of a local Python interpreter:
+
+1. Install and start Docker Desktop.
+2. Open this project directory in PyCharm.
+3. Go to **Settings -> Build, Execution, Deployment -> Docker** and add a Docker Desktop connection.
+4. Copy `.env.example` to `.env`. By default it points `DB_HOST`/`DB_PORT` to the remote MySQL instance `121.41.95.26:33306`; alternatively, set `DATABASE_URL` to override the split database settings.
+5. Open the **Services** panel in PyCharm and add/open `docker-compose.yml`.
+6. Start the `scraper` service. It does not depend on the optional local `mysql` service. Its default command is:
+
+```bash
+python -m src.main --help
+```
+
+7. To initialize the database, edit the `scraper` service command in PyCharm to run:
+
+```bash
+python -m src.main init-db
+```
+
+8. To run a small crawler job, edit the `scraper` service command to run:
+
+```bash
+python -m src.main crawl-universities --country united-kingdom --limit 10
+```
+
 ## Environment variables
 
-`.env.example` contains:
+`.env.example` contains split database settings:
 
 ```dotenv
-DATABASE_URL=mysql+pymysql://tree_user:tree_password@localhost:3306/tree_education_uniinfo
+DB_HOST=121.41.95.26
+DB_PORT=33306
+DB_NAME=tree_education_uniinfo
+DB_USER=tree_user
+DB_PASSWORD=tree_password
 HEADLESS=true
 REQUEST_MIN_DELAY=1
 REQUEST_MAX_DELAY=3
@@ -88,6 +130,28 @@ CRAWLER_USER_AGENT=Mozilla/5.0 TreeEducationBot/0.1
 SNAPSHOT_DIR=data/snapshots
 BLOCK_IMAGES=true
 REQUEST_TIMEOUT_MS=30000
+```
+
+Database URL compatibility is still supported:
+
+1. If `.env` contains `DATABASE_URL`, the application uses it first.
+2. If `DATABASE_URL` is not set, the application builds `settings.database_url` from `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`.
+3. `src/db.py` continues to create the SQLAlchemy engine from `settings.database_url`.
+
+If you choose to use the optional local Docker Compose MySQL service instead of the default remote MySQL instance, use these split values in `.env`:
+
+```dotenv
+DB_HOST=mysql
+DB_PORT=3306
+DB_NAME=tree_education_uniinfo
+DB_USER=tree_user
+DB_PASSWORD=tree_password
+```
+
+You can also keep a single compatible `DATABASE_URL` in `.env` when needed:
+
+```dotenv
+DATABASE_URL=mysql+pymysql://tree_user:tree_password@mysql:3306/tree_education_uniinfo
 ```
 
 Set `HEADLESS=false` if you need to watch a local debugging browser session.
@@ -175,7 +239,7 @@ Check Docker health and credentials:
 docker compose ps
 ```
 
-Confirm `.env` has the same `DATABASE_URL` as `.env.example`.
+Confirm `.env` points to the database you are actually using. The default sample uses remote MySQL at `121.41.95.26:33306`. For the optional local Docker Compose MySQL service, use `DB_HOST=mysql` and `DB_PORT=3306`, or set a compatible `DATABASE_URL` which takes precedence.
 
 ### No rows are extracted
 
@@ -190,33 +254,39 @@ Do not bypass protections. Inspect the saved snapshot if one exists, then update
 
 ## P0 验收步骤
 
-> 验收前请确认 `.env` 中 `DATABASE_URL` 指向可用的 MySQL 8 实例，并已执行 `playwright install chromium`。爬虫保持单线程、低频请求，并在每次请求前检查 `robots.txt`。
+> 验收前请确认 `.env` 中 `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` 指向可用的 MySQL 8 实例（默认示例为远端 MySQL `121.41.95.26:33306`）；如果设置了 `DATABASE_URL`，则会优先使用 `DATABASE_URL`。Docker 镜像内已安装 Chromium。爬虫保持单线程、低频请求，并在每次请求前检查 `robots.txt`。
 
-1. 启动 MySQL：
-
-```bash
-docker compose up -d mysql
-```
-
-2. 初始化数据库表：
+1. 构建 scraper 镜像：
 
 ```bash
-python -m src.main init-db
+docker compose build scraper
 ```
 
-3. 抓取英国本科大学列表页前 10 条公开结果：
+2. 确认 scraper CLI 可运行：
 
 ```bash
-python -m src.main crawl-universities --country united-kingdom --limit 10
+docker compose run --rm scraper python -m src.main --help
 ```
 
-4. 如果命令没有报错但写入 0 条，请先查看最近保存的 HTML snapshot，不要绕过验证码、不要绕过 robots、不要加代理池：
+3. 初始化数据库表：
+
+```bash
+docker compose run --rm scraper python -m src.main init-db
+```
+
+4. 抓取英国本科大学列表页前 10 条公开结果：
+
+```bash
+docker compose run --rm scraper python -m src.main crawl-universities --country united-kingdom --limit 10
+```
+
+5. 如果命令没有报错但写入 0 条，请先查看最近保存的 HTML snapshot，不要绕过验证码、不要绕过 robots、不要加代理池：
 
 ```bash
 find data/snapshots/bachelorsportal -type f | sort | tail -5
 ```
 
-5. 使用 SQL 检查 `university` 表是否至少写入 1 条有效学校数据，且 `name`、`source_url`、`source_university_id` 非空：
+6. 使用 SQL 检查 `university` 表是否至少写入 1 条有效学校数据，且 `name`、`source_url`、`source_university_id` 非空：
 
 ```sql
 SELECT COUNT(*) AS university_count
