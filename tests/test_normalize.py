@@ -23,6 +23,12 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(result["currency"], "EUR")
         self.assertEqual(result["period"], "year")
 
+    def test_normalize_tuition_cny_amount_before_currency(self):
+        result = normalize_tuition("280,343 CNY / year")
+        self.assertEqual(result["amount"], Decimal("280343.00"))
+        self.assertEqual(result["currency"], "CNY")
+        self.assertEqual(result["period"], "year")
+
     def test_normalize_rating(self):
         self.assertEqual(normalize_rating("4.2"), Decimal("4.20"))
 
