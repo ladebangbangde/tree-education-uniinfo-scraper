@@ -98,6 +98,38 @@ class ProgrammeDetailParserTest(unittest.TestCase):
         self.assertEqual(facts["teaching_language"], "English")
         self.assertEqual(facts["scholarships_available"], 1)
 
+    def test_facts_summary_falls_back_to_ordered_page_text_without_card_selector(self):
+        facts = parse_facts_summary(
+            """
+            <html><body>
+              <main>
+                Tuition fee
+                24,224 USD / year
+                Scholarships available
+                Duration
+                3 years
+                Apply date
+                Jun 2026
+                Start date
+                Sep 2026
+                Campus location
+                Portsmouth, United Kingdom
+                Taught in
+                English
+              </main>
+            </body></html>
+            """
+        )
+
+        self.assertEqual(facts["tuition_text_raw"], "24,224 USD / year")
+        self.assertEqual(facts["duration_text_raw"], "3 years")
+        self.assertEqual(facts["apply_date_text"], "Jun 2026")
+        self.assertEqual(facts["start_date_text"], "Sep 2026")
+        self.assertEqual(facts["city"], "Portsmouth")
+        self.assertEqual(facts["country"], "United Kingdom")
+        self.assertEqual(facts["teaching_language"], "English")
+        self.assertEqual(facts["scholarships_available"], 1)
+
     def test_facts_summary_does_not_parse_unscoped_overview_text(self):
         facts = parse_facts_summary(
             """

@@ -33,6 +33,24 @@ FACT_FIELD_KEYS = [
     "country",
     "teaching_language",
 ]
+FACT_KEYWORDS = [
+    "Tuition fee",
+    "Duration",
+    "Apply date",
+    "Start date",
+    "Campus location",
+    "Taught in",
+    "Scholarships available",
+]
+ORDERED_FACT_LABELS = [
+    ("tuition", "Tuition fee"),
+    ("scholarship", "Scholarships available"),
+    ("duration", "Duration"),
+    ("apply_date", "Apply date"),
+    ("start_date", "Start date"),
+    ("location", "Campus location"),
+    ("teaching_language", "Taught in"),
+]
 MONTHS = {
     "jan": 1,
     "feb": 2,
@@ -98,6 +116,59 @@ def parse_scholarship_fact(value: str | None) -> bool | None:
     return True if re.search(r"\bscholarships?\s+available\b", text, re.I) else None
 
 
+def _debug_fact_keywords(html: str, final_url: str | None = None) -> None:
+    page_text = clean_text(html) or ""
+    found_any = False
+    for keyword in FACT_KEYWORDS:
+        match = re.search(re.escape(keyword), page_text, re.I)
+        if not match:
+            continue
+        found_any = True
+        start = max(match.start() - 300, 0)
+        end = min(match.end() + 300, len(page_text))
+        logger.info(
+            "Programme detail keyword context: keyword={!r}, context={!r}",
+            keyword,
+            page_text[start:end],
+        )
+    if not found_any:
+        logger.warning(
+            "Programme detail fact keywords not found in page text: final_url={}, html_length={}",
+            final_url,
+            len(html or ""),
+        )
+
+
+def _fact_keyword_count(text: str | None) -> int:
+    lowered = (clean_text(text) or "").lower()
+    return sum(1 for keyword in FACT_KEYWORDS if keyword.lower() in lowered)
+
+
+def _is_ignored_text_parent(node) -> bool:
+    parent = getattr(node, "parent", None)
+    return bool(parent and getattr(parent, "name", "") in {"script", "style", "noscript"})
+
+
+def _container_from_tuition_keyword(soup) -> Any | None:
+    """Locate a likely facts card by finding the Tuition fee text then walking up."""
+    candidates: list[Any] = []
+    for text_node in soup.find_all(string=re.compile(r"\bTuition\s+fee\b", re.I)):
+        if _is_ignored_text_parent(text_node):
+            continue
+        node = getattr(text_node, "parent", None)
+        while node is not None and getattr(node, "name", None) not in {"html", "body"}:
+            if getattr(node, "name", None) in {"section", "article", "aside", "div", "dl", "ul", "ol", "main"}:
+                text = clean_text(node.get_text(" ")) or ""
+                if _fact_keyword_count(text) >= 5:
+                    candidates.append(node)
+                    break
+            node = getattr(node, "parent", None)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda candidate: len(clean_text(candidate.get_text(" ")) or ""))
+    return candidates[0]
+
+
 def _looks_like_facts_container(text: str) -> bool:
     lowered = text.lower()
     score = sum(1 for labels in FACT_LABELS.values() if any(label in lowered for label in labels))
@@ -107,6 +178,7 @@ def _looks_like_facts_container(text: str) -> bool:
 
 
 def _fact_containers(soup) -> list[Any]:
+    keyword_container = _container_from_tuition_keyword(soup)
     selectors = [
         '[data-testid*="fact" i]',
         '[data-testid*="summary" i]',
@@ -118,6 +190,8 @@ def _fact_containers(soup) -> list[Any]:
         'dl',
     ]
     containers: list[Any] = []
+    if keyword_container is not None:
+        containers.append(keyword_container)
     for selector in selectors:
         for node in soup.select(selector):
             text = clean_text(node.get_text(" ")) or ""
@@ -216,15 +290,42 @@ def _first_fact_map(soup) -> dict[str, str | None]:
     for container in _fact_containers(soup):
         for key, value in _facts_from_container(container).items():
             merged.setdefault(key, value)
-        if merged:
-            break
     return merged
 
 
-def parse_facts_summary(html: str) -> dict[str, Any]:
-    """Parse programme top facts summary fields from a scoped facts-card DOM only."""
+def _ordered_facts_from_page_text(html: str) -> dict[str, str | None]:
+    """Fallback parser for pages where facts render without useful DOM markers."""
+    text = clean_text(html) or ""
+    positions: list[tuple[int, str, str]] = []
+    for key, label in ORDERED_FACT_LABELS:
+        match = re.search(rf"\b{re.escape(label)}\b", text, re.I)
+        if match:
+            positions.append((match.start(), key, label))
+    positions.sort(key=lambda item: item[0])
+    keys_in_order = [key for _, key, _ in positions]
+    required_sequence = ["tuition", "duration", "apply_date", "start_date", "location", "teaching_language"]
+    if not all(key in keys_in_order for key in required_sequence):
+        return {}
+
+    facts: dict[str, str | None] = {}
+    for index, (start, key, label) in enumerate(positions):
+        value_start = start + len(label)
+        value_end = positions[index + 1][0] if index + 1 < len(positions) else min(len(text), value_start + 120)
+        value = clean_text(text[value_start:value_end].strip(" :-"))
+        if key == "scholarship":
+            facts.setdefault("scholarship", label)
+        elif value:
+            facts.setdefault(key, value)
+    return facts
+
+
+def parse_facts_summary(html: str, final_url: str | None = None) -> dict[str, Any]:
+    """Parse programme top facts summary fields from a scoped facts-card DOM first."""
+    _debug_fact_keywords(html, final_url=final_url)
     soup = soupify(html)
     facts = _first_fact_map(soup)
+    if not facts:
+        facts = _ordered_facts_from_page_text(html)
     tuition = parse_tuition_fact(facts.get("tuition"))
     duration = parse_duration_fact(facts.get("duration"))
     apply_date = parse_apply_date_fact(facts.get("apply_date"))
@@ -290,7 +391,7 @@ def _parse_month_year(value: str | None) -> tuple[int | None, int | None]:
 
 def parse_programme_detail(html: str, page_url: str) -> dict[str, Any]:
     soup = soupify(html)
-    facts_summary = parse_facts_summary(html)
+    facts_summary = parse_facts_summary(html, final_url=page_url)
     facts = facts_summary.pop("_raw_facts")
     start_date = facts_summary.get("start_date_text")
     intake_year, intake_month = _parse_month_year(start_date)
