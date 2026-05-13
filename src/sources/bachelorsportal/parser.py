@@ -180,19 +180,20 @@ def _programme_count_from_text(text: str) -> int | None:
 
 def _count_near_label(text: str, label: str) -> int | None:
     escaped = re.escape(label)
-    before_label = rf"(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\s+{escaped}s?\b"
-    after_label = rf"{escaped}s?\s*:?\s*(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\b"
-    # Bachelorsportal cards commonly show either "125 Bachelors" or
-    # "Bachelors 42". Scholarship counts are sometimes adjacent to bachelor
-    # counts ("Bachelors 42 Scholarships 7"), so prefer the label-before form
-    # for scholarships to avoid accidentally taking the bachelor value.
+    label_pattern = rf"{escaped}(?:'s|s)?"
+    before_label = rf"(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\s+{label_pattern}\b"
+    after_label = rf"{label_pattern}\s*:?\s*(\d[\d,]*|\d+(?:\.\d+)?[KkMm])\b"
+    # Bachelorsportal cards commonly show either "125 Bachelors",
+    # "Bachelor's 42", or "Bachelors 42". Scholarship counts are sometimes
+    # adjacent to bachelor counts ("Bachelors 42 Scholarships 7"), so prefer
+    # the label-before form for scholarships to avoid accidentally taking the
+    # bachelor value.
     patterns = [before_label, after_label] if label.lower().startswith("bachelor") else [after_label, before_label]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
             return normalize_count(match.group(1))
     return None
-
 
 def _rating_from_text(text: str) -> Any:
     patterns = [
@@ -254,7 +255,11 @@ def _find_first_by_key(value: Any, key_patterns: tuple[str, ...]) -> Any:
         for key, item in value.items():
             normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
             if any(pattern in normalized for pattern in key_patterns) and item not in (None, ""):
-                return item
+                if not isinstance(item, (dict, list)):
+                    return item
+                nested = _find_first_by_key(item, key_patterns)
+                if nested not in (None, ""):
+                    return nested
         for item in value.values():
             found = _find_first_by_key(item, key_patterns)
             if found not in (None, ""):
@@ -349,16 +354,58 @@ def _script_json_values(html: str) -> list[Any]:
     return values
 
 
+
 def _dedupe_records(records: list[dict]) -> list[dict]:
     deduped: list[dict] = []
     seen: set[str] = set()
     for record in records:
-        key = record.get("source_url") or record.get("source_university_id")
+        key = _record_key(record)
         if not key or key in seen:
             continue
         deduped.append(record)
         seen.add(key)
     return deduped
+
+
+def _record_key(record: dict) -> str | None:
+    return record.get("source_url") or record.get("source_university_id")
+
+
+def _merge_record_fields(base: dict, update: dict) -> bool:
+    """Fill missing parser fields in `base` from another extraction strategy."""
+    changed = False
+    for key, value in update.items():
+        if value in (None, ""):
+            continue
+        if base.get(key) in (None, ""):
+            base[key] = value
+            changed = True
+    return changed
+
+
+def _upsert_parsed_record(records: list[dict], index: dict[str, dict], record: dict) -> tuple[bool, bool]:
+    key = _record_key(record)
+    if not key:
+        return False, False
+    existing = index.get(key)
+    if existing is None:
+        records.append(record)
+        index[key] = record
+        return True, False
+    return False, _merge_record_fields(existing, record)
+
+
+def _log_parse_summary(records: list[dict]) -> None:
+    missing = _missing_field_stats(records)
+    logger.info(
+        "University list parser debug: parsed_count={}, missing_city_count={}, "
+        "missing_bachelor_count={}, missing_scholarship_count={}, missing_review_count={}",
+        len(records),
+        missing["city"],
+        missing["bachelor_count"],
+        missing["scholarship_count"],
+        missing["review_count"],
+    )
 
 
 def _parse_structured_records(html: str, page_url: str) -> list[dict]:
@@ -371,6 +418,7 @@ def _parse_structured_records(html: str, page_url: str) -> list[dict]:
     records = _dedupe_records(records)
     logger.info("University list parser: extracted {} record(s) from JSON/hydration data", len(records))
     return records
+
 
 def _parse_university_cards_regex(html: str, page_url: str) -> list[dict]:
     records: list[dict] = []
@@ -461,30 +509,31 @@ def _missing_field_stats(records: list[dict]) -> dict[str, int]:
 def parse_university_cards(html: str, page_url: str) -> list[dict]:
     """Parse university search cards and require non-empty identity fields."""
     records = _parse_structured_records(html, page_url)
-    seen = {record["source_url"] for record in records}
+    index = {record["source_url"]: record for record in records}
     fallback_country = _country_from_page_url(page_url)
 
     if records:
         logger.info("University list parser: JSON/hydration extraction produced {} unique university record(s)", len(records))
+        logger.info("University list parser: running DOM fallback to enrich missing JSON fields")
     else:
         logger.info("University list parser: no JSON/hydration records found; falling back to DOM university cards")
 
     if BeautifulSoup is None:
         logger.info("University list parser: BeautifulSoup unavailable; using regex fallback")
+        regex_added = 0
+        regex_enriched = 0
         for record in _parse_university_cards_regex(html, page_url):
-            if record["source_url"] not in seen:
-                records.append(record)
-                seen.add(record["source_url"])
-        logger.info(
-            "University list parser: extracted university count={}, missing_fields={}",
-            len(records),
-            _missing_field_stats(records),
-        )
+            added, enriched = _upsert_parsed_record(records, index, record)
+            regex_added += int(added)
+            regex_enriched += int(enriched)
+        logger.info("University list parser: regex fallback added={}, enriched={}", regex_added, regex_enriched)
+        _log_parse_summary(records)
         return records
 
     soup = soupify(html)
     card_nodes = _university_card_nodes(soup)
-    dom_records = 0
+    dom_added = 0
+    dom_enriched = 0
     for node in card_nodes:
         try:
             link = node.select_one('a[href*="/universities/"], a[href*="/university/"]') if hasattr(node, "select_one") else None
@@ -493,7 +542,7 @@ def parse_university_cards(html: str, page_url: str) -> list[dict]:
             if not link:
                 continue
             url = _absolute(link.get("href"), page_url)
-            if not url or url in seen:
+            if not url:
                 continue
             text = clean_text(node.get_text(" ")) or ""
             selector_name = _first_text(
@@ -505,7 +554,15 @@ def parse_university_cards(html: str, page_url: str) -> list[dict]:
             else:
                 logger.info("University list parser: name selector fallback used for url={}", url)
                 name = _name_from_card_text(link.get_text(" "))
-            selector_location = _first_text(node, ['[data-testid*="location" i]', '[aria-label*="location" i]', '[class*="Location"]', '[class*="location"]'])
+            selector_location = _first_text(
+                node,
+                [
+                    '[data-testid*="location" i]',
+                    '[aria-label*="location" i]',
+                    '[class*="Location"]',
+                    '[class*="location"]',
+                ],
+            )
             if selector_location:
                 location = selector_location
             else:
@@ -526,18 +583,15 @@ def parse_university_cards(html: str, page_url: str) -> list[dict]:
             )
             record["ranking_text"] = _first_text(node, ['[data-testid*="ranking" i]', '[aria-label*="ranking" i]'])
             record["description"] = _first_text(node, ["p"])
-            records.append(record)
-            seen.add(url)
-            dom_records += 1
+            added, enriched = _upsert_parsed_record(records, index, record)
+            dom_added += int(added)
+            dom_enriched += int(enriched)
         except Exception as exc:
             logger.exception("Failed to parse one university card: {}", exc)
-    logger.info("University list parser: extracted {} record(s) from DOM fallback", dom_records)
-    logger.info(
-        "University list parser: extracted university count={}, missing_fields={}",
-        len(records),
-        _missing_field_stats(records),
-    )
+    logger.info("University list parser: DOM fallback added={}, enriched={}", dom_added, dom_enriched)
+    _log_parse_summary(records)
     return records
+
 
 def parse_university_detail(html: str, source_url: str) -> dict:
     soup = soupify(html)

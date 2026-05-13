@@ -62,6 +62,37 @@ EMBEDDED_JSON_FIXTURE = """
 """
 
 
+PARTIAL_JSON_WITH_DOM_FIXTURE = """
+<html>
+  <body>
+    <script id="__NEXT_DATA__" type="application/json">
+      {
+        "props": {
+          "pageProps": {
+            "universities": [
+              {
+                "name": "Card Enriched University",
+                "url": "https://www.mastersportal.com/universities/321/card-enriched-university.html",
+                "country": "United Kingdom",
+                "ratingValue": 4.2
+              }
+            ]
+          }
+        }
+      }
+    </script>
+    <main>
+      <article>
+        <a href="https://www.mastersportal.com/universities/321/card-enriched-university.html">
+          Card Enriched University 4.2 (64) Location Edinburgh, United Kingdom Attendance On campus Bachelor's 25 Scholarships 8 Visit University Page
+        </a>
+      </article>
+    </main>
+  </body>
+</html>
+"""
+
+
 class UniversityListParserTest(unittest.TestCase):
     def test_build_university_search_url_uses_country_path(self):
         self.assertEqual(
@@ -142,6 +173,20 @@ class UniversityListParserTest(unittest.TestCase):
         self.assertEqual(record["scholarship_count"], 12)
         self.assertEqual(record["review_count"], 321)
         self.assertEqual(str(record["rating"]), "4.70")
+
+    def test_dom_fallback_enriches_partial_json_records(self):
+        records = parse(PARTIAL_JSON_WITH_DOM_FIXTURE, "https://www.bachelorsportal.com/search/universities/bachelor/united-kingdom")
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["name"], "Card Enriched University")
+        self.assertEqual(record["source_url"], "https://www.bachelorsportal.com/universities/321/card-enriched-university.html")
+        self.assertEqual(record["country"], "United Kingdom")
+        self.assertEqual(record["city"], "Edinburgh")
+        self.assertEqual(record["bachelor_count"], 25)
+        self.assertEqual(record["scholarship_count"], 8)
+        self.assertEqual(record["review_count"], 64)
+        self.assertEqual(str(record["rating"]), "4.20")
 
 
 if __name__ == "__main__":
