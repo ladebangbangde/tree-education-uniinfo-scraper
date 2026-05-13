@@ -40,6 +40,41 @@ FACT_PROGRAMME_FIELDS = (
 )
 
 
+FACTS_DIAG_KEYWORDS = (
+    "Tuition fee",
+    "Duration",
+    "Apply date",
+    "Start date",
+    "Campus location",
+    "Taught in",
+    "Scholarships available",
+)
+
+
+def _facts_diag_context(html_text: str, keyword: str, context_chars: int = 300) -> str:
+    index = html_text.find(keyword)
+    if index < 0:
+        return ""
+    start = max(0, index - context_chars)
+    end = min(len(html_text), index + len(keyword) + context_chars)
+    return html_text[start:end].replace("\r", "\\r").replace("\n", "\\n")
+
+
+def _print_facts_block_diagnostics(html_text: str) -> None:
+    print(f"[FACTS_DIAG] html_length={len(html_text)}")
+
+    found_any = False
+    for keyword in FACTS_DIAG_KEYWORDS:
+        found = keyword in html_text
+        found_any = found_any or found
+        print(f"[FACTS_DIAG] {keyword} found={str(found).lower()}")
+        if found:
+            print(f"[FACTS_DIAG] {keyword} context={_facts_diag_context(html_text, keyword)}")
+
+    if not found_any:
+        print("[FACTS_DIAG] facts block not present in fetched html")
+
+
 def _safe_programme_updates(parsed: dict, source_hash: str, crawled_at: datetime) -> dict:
     # The top facts card is the authority for these detail facts. Persist NULL
     # for missing facts instead of preserving stale values from earlier crawls.
@@ -66,9 +101,12 @@ def crawl_programme_detail(programme_id: int) -> bool:
             logger.warning("Programme detail fetch disallowed by robots.txt: programme_id={}, source_url={}", programme_id, source_url)
             return False
 
-        source_hash, path = save_html_snapshot(result.html, settings.source_site)
+        html_text = result.html or ""
+        _print_facts_block_diagnostics(html_text)
+
+        source_hash, path = save_html_snapshot(html_text, settings.source_site)
         logger.info("Saved programme detail snapshot {}", path)
-        parsed = parse(result.html, result.final_url)
+        parsed = parse(html_text, result.final_url)
         parsed_facts = parsed.get("facts", {})
         if not parsed_facts:
             logger.warning(

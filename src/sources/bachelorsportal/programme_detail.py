@@ -211,7 +211,56 @@ def _facts_from_container(container) -> dict[str, str | None]:
     return facts
 
 
+def _quick_fact_label_value_map(soup) -> dict[str, str | None]:
+    """Extract Bachelorsportal QuickFactComponent label/value pairs."""
+    label_map: dict[str, str | None] = {}
+    components = soup.select(".QuickFactComponent")
+    for component in components:
+        component_text = clean_text(component.get_text(" ")) or ""
+        label_node = component.select_one(".Label")
+        label = clean_text(label_node.get_text(" ")) if label_node else None
+
+        if not label and re.search(r"\bscholarships?\s+available\b", component_text, re.I):
+            label = "Scholarships available"
+
+        if not label:
+            continue
+
+        value_node = component.select_one(".Value") or component.select_one(".ValueContainer")
+        value = clean_text(value_node.get_text(" ")) if value_node else None
+
+        if re.fullmatch(r"scholarships?\s+available", label, re.I) or re.search(
+            r"\bscholarships?\s+available\b", component_text, re.I
+        ):
+            label_map.setdefault("Scholarships available", value or "Scholarships available")
+            continue
+
+        if value:
+            label_map.setdefault(label, value)
+    return label_map
+
+
+def _facts_from_quick_fact_components(soup) -> dict[str, str | None]:
+    facts: dict[str, str | None] = {}
+    parsed_label_map = _quick_fact_label_value_map(soup)
+    logger.info("parsed_label_map={}", parsed_label_map)
+
+    for label, value in parsed_label_map.items():
+        if re.fullmatch(r"scholarships?\s+available", label, re.I):
+            facts.setdefault("scholarship", value or label)
+            continue
+
+        key = _label_key(label)
+        if key:
+            facts.setdefault(key, value)
+    return facts
+
+
 def _first_fact_map(soup) -> dict[str, str | None]:
+    quick_fact_map = _facts_from_quick_fact_components(soup)
+    if quick_fact_map:
+        return quick_fact_map
+
     merged: dict[str, str | None] = {}
     for container in _fact_containers(soup):
         for key, value in _facts_from_container(container).items():
