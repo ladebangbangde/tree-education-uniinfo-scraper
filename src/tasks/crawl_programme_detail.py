@@ -69,6 +69,15 @@ def crawl_programme_detail(programme_id: int) -> bool:
         source_hash, path = save_html_snapshot(result.html, settings.source_site)
         logger.info("Saved programme detail snapshot {}", path)
         parsed = parse(result.html, result.final_url)
+        parsed_facts = parsed.get("facts", {})
+        if not parsed_facts:
+            logger.warning(
+                "Programme detail facts summary block was not parsed: programme_id={}, source_url={}, html_length={}",
+                programme_id,
+                source_url,
+                len(result.html or ""),
+            )
+        logger.info("parsed_facts programme_id={} parsed_facts={}", programme_id, parsed["programme"])
         now = _now()
 
         with session_scope() as session:
@@ -102,7 +111,6 @@ def crawl_programme_detail(programme_id: int) -> bool:
                 upsert_application_requirement(session, requirement)
 
         programme_fields = parsed["programme"]
-        logger.info("Facts summary parsed for programme_id={}: {}", programme_id, programme_fields)
         tuition = (
             f"{programme_fields.get('tuition_amount')} {programme_fields.get('tuition_currency')}/"
             f"{programme_fields.get('tuition_period')}"
