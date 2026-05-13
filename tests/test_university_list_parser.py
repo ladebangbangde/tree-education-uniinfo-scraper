@@ -93,6 +93,27 @@ PARTIAL_JSON_WITH_DOM_FIXTURE = """
 """
 
 
+GLOBAL_SCHOLARSHIP_TEXT_FIXTURE = """
+<html>
+  <body>
+    <aside>39 Scholarships available on the portal</aside>
+    <main>
+      <article>
+        <a href="https://www.mastersportal.com/universities/501/no-scholarship-university.html">
+          No Scholarship University 4.1 (14) Location Bristol, United Kingdom Attendance On campus Bachelor's 20 Visit University Page
+        </a>
+      </article>
+      <article>
+        <a href="https://www.mastersportal.com/universities/502/card-scholarship-university.html">
+          Card Scholarship University 4.0 (9) Location Leeds, United Kingdom Attendance On campus Bachelor's 15 5 Scholarships Visit University Page
+        </a>
+      </article>
+    </main>
+  </body>
+</html>
+"""
+
+
 class UniversityListParserTest(unittest.TestCase):
     def test_build_university_search_url_uses_country_path(self):
         self.assertEqual(
@@ -138,7 +159,7 @@ class UniversityListParserTest(unittest.TestCase):
         self.assertIsNone(first["city"])
         self.assertEqual(first["location_text"], "Multiple locations")
         self.assertEqual(first["bachelor_count"], 369)
-        self.assertEqual(first["scholarship_count"], 39)
+        self.assertIsNone(first["scholarship_count"])
         self.assertEqual(str(first["rating"]), "4.30")
         self.assertEqual(first["review_count"], 115)
 
@@ -148,6 +169,7 @@ class UniversityListParserTest(unittest.TestCase):
         self.assertEqual(second["city"], "London")
         self.assertEqual(second["country"], "United Kingdom")
         self.assertEqual(second["bachelor_count"], 11)
+        self.assertIsNone(second["scholarship_count"])
         self.assertEqual(str(second["rating"]), "5.00")
         self.assertEqual(second["review_count"], 1)
 
@@ -156,7 +178,7 @@ class UniversityListParserTest(unittest.TestCase):
         self.assertEqual(third["city"], "Middlesbrough")
         self.assertEqual(third["country"], "United Kingdom")
         self.assertEqual(third["bachelor_count"], 177)
-        self.assertEqual(third["scholarship_count"], 39)
+        self.assertIsNone(third["scholarship_count"])
         self.assertEqual(str(third["rating"]), "4.40")
         self.assertEqual(third["review_count"], 75)
 
@@ -187,6 +209,27 @@ class UniversityListParserTest(unittest.TestCase):
         self.assertEqual(record["scholarship_count"], 8)
         self.assertEqual(record["review_count"], 64)
         self.assertEqual(str(record["rating"]), "4.20")
+
+    def test_global_scholarship_text_is_not_copied_to_cards(self):
+        records = parse(GLOBAL_SCHOLARSHIP_TEXT_FIXTURE, "https://www.bachelorsportal.com/search/universities/bachelor/united-kingdom")
+
+        self.assertEqual(len(records), 2)
+        first = records[0]
+        self.assertEqual(first["name"], "No Scholarship University")
+        self.assertEqual(first["source_url"], "https://www.bachelorsportal.com/universities/501/no-scholarship-university.html")
+        self.assertEqual(first["country"], "United Kingdom")
+        self.assertEqual(first["city"], "Bristol")
+        self.assertEqual(str(first["rating"]), "4.10")
+        self.assertEqual(first["bachelor_count"], 20)
+        self.assertEqual(first["review_count"], 14)
+        self.assertIsNone(first["scholarship_count"])
+
+        second = records[1]
+        self.assertEqual(second["name"], "Card Scholarship University")
+        self.assertEqual(second["city"], "Leeds")
+        self.assertEqual(second["bachelor_count"], 15)
+        self.assertEqual(second["review_count"], 9)
+        self.assertEqual(second["scholarship_count"], 5)
 
 
 if __name__ == "__main__":

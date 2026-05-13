@@ -159,7 +159,7 @@ def _name_from_card_text(text: str | None) -> str | None:
     if not cleaned:
         return None
     marker_match = re.search(
-        r"\s+(?:\d(?:\.\d+)?\s*\(\d[\d,]*\)|Location\b|Attendance\b|Global Ranking\b|Institution type\b|Bachelors?\b|Masters?\b|Scholarships?\b)",
+        r"\s+(?:\d(?:\.\d+)?\s*\(\d[\d,]*\)|Location\b|Attendance\b|Global Ranking\b|Institution type\b|Bachelors?\b|Masters?\b)",
         cleaned,
         re.I,
     )
@@ -395,16 +395,42 @@ def _upsert_parsed_record(records: list[dict], index: dict[str, dict], record: d
     return False, _merge_record_fields(existing, record)
 
 
-def _log_parse_summary(records: list[dict]) -> None:
+def _suspicious_same_scholarship_count(records: list[dict]) -> int:
+    counts: dict[int, int] = {}
+    for record in records:
+        value = record.get("scholarship_count")
+        if value is not None:
+            counts[int(value)] = counts.get(int(value), 0) + 1
+    if len(records) < 2 or not counts:
+        return 0
+    most_common_value, most_common_count = max(counts.items(), key=lambda item: item[1])
+    if most_common_count / len(records) >= 0.8 and most_common_count >= 2:
+        logger.warning(
+            "University list parser: suspicious_same_scholarship_count={} value={} parsed_count={}; "
+            "clearing repeated scholarship_count because it likely came from page-global text",
+            most_common_count,
+            most_common_value,
+            len(records),
+        )
+        for record in records:
+            if record.get("scholarship_count") == most_common_value:
+                record["scholarship_count"] = None
+        return most_common_count
+    return 0
+
+
+def _log_parse_summary(records: list[dict], suspicious_same_scholarship_count: int = 0) -> None:
     missing = _missing_field_stats(records)
     logger.info(
         "University list parser debug: parsed_count={}, missing_city_count={}, "
-        "missing_bachelor_count={}, missing_scholarship_count={}, missing_review_count={}",
+        "missing_bachelor_count={}, missing_scholarship_count={}, missing_review_count={}, "
+        "suspicious_same_scholarship_count={}",
         len(records),
         missing["city"],
         missing["bachelor_count"],
         missing["scholarship_count"],
         missing["review_count"],
+        suspicious_same_scholarship_count,
     )
 
 
@@ -527,7 +553,8 @@ def parse_university_cards(html: str, page_url: str) -> list[dict]:
             regex_added += int(added)
             regex_enriched += int(enriched)
         logger.info("University list parser: regex fallback added={}, enriched={}", regex_added, regex_enriched)
-        _log_parse_summary(records)
+        suspicious = _suspicious_same_scholarship_count(records)
+        _log_parse_summary(records, suspicious)
         return records
 
     soup = soupify(html)
@@ -589,7 +616,8 @@ def parse_university_cards(html: str, page_url: str) -> list[dict]:
         except Exception as exc:
             logger.exception("Failed to parse one university card: {}", exc)
     logger.info("University list parser: DOM fallback added={}, enriched={}", dom_added, dom_enriched)
-    _log_parse_summary(records)
+    suspicious = _suspicious_same_scholarship_count(records)
+    _log_parse_summary(records, suspicious)
     return records
 
 
