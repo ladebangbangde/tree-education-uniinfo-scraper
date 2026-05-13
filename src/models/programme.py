@@ -11,7 +11,7 @@ class Programme(Base):
     university_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("university.id"))
     source_programme_id: Mapped[str | None] = mapped_column(String(128))
     source_url: Mapped[str | None] = mapped_column(String(1024))
-    name: Mapped[str | None] = mapped_column(String(255))
+    name: Mapped[str | None] = mapped_column(String(500))
     degree_type: Mapped[str | None] = mapped_column(String(128))
     discipline: Mapped[str | None] = mapped_column(String(255))
     attendance_mode: Mapped[str | None] = mapped_column(String(128))

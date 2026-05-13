@@ -676,29 +676,6 @@ def parse_content_sections(soup, source_url: str) -> list[dict]:
 
 
 def parse_programmes(html: str, page_url: str) -> list[dict]:
-    soup = soupify(html)
-    records = []
-    for node in soup.select('article, li, div[class*="Programme"], div[class*="SearchResult"], div[class*="Card"]'):
-        link = node.select_one('a[href*="/studies/"], a[href*="/programme/"]')
-        if not link:
-            continue
-        url = _absolute(link.get("href"), page_url)
-        text = clean_text(node.get_text(" ")) or ""
-        duration_match = re.search(r"\d+\s*(?:years?|months?)", text, re.I)
-        tuition_match = re.search(r"(?:£|€|\$|GBP|EUR|USD)\s*[\d,]+(?:\.\d+)?\s*(?:/|per)?\s*(?:year|month|semester)?", text, re.I)
-        duration_raw = duration_match.group(0) if duration_match else None
-        tuition_raw = tuition_match.group(0) if tuition_match else None
-        duration = normalize_duration(duration_raw)
-        tuition = normalize_tuition(tuition_raw)
-        records.append({
-            "source_programme_id": source_id_from_url(url), "source_url": url,
-            "name": clean_text(link.get_text(" ")) or _first_text(node, ["h2", "h3"]),
-            "degree_type": "Bachelor" if re.search(r"bachelor", text, re.I) else None,
-            "discipline": None, "attendance_mode": "Full-time" if re.search(r"full[ -]?time", text, re.I) else None,
-            "delivery_mode": "On Campus" if re.search(r"on campus", text, re.I) else None,
-            "duration_value": duration["duration_value"], "duration_unit": duration["duration_unit"],
-            "tuition_amount": tuition["amount"], "tuition_currency": tuition["currency"], "tuition_period": tuition["period"],
-            "city": None, "country": None, "is_featured": 1 if re.search(r"featured", text, re.I) else 0,
-            "tuition_text_raw": tuition_raw, "duration_text_raw": duration_raw,
-        })
-    return records
+    from .programme_parser import parse_programmes as _parse_programmes
+
+    return _parse_programmes(html, page_url)

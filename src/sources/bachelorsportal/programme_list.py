@@ -1,6 +1,6 @@
 from __future__ import annotations
 from urllib.parse import urljoin
-from .parser import parse_programmes
+from .programme_parser import parse_programmes
 
 def build_programmes_url(university_url: str) -> str:
     return urljoin(university_url.rstrip("/") + "/", "programmes")
