@@ -1,8 +1,9 @@
 """Application configuration loaded from environment variables."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,12 +16,26 @@ def _bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _database_url() -> str:
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return database_url
+
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "3306")
+    name = os.getenv("DB_NAME", "tree_education_uniinfo")
+    user = os.getenv("DB_USER", "tree_user")
+    password = os.getenv("DB_PASSWORD", "tree_password")
+
+    return (
+        f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{name}"
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = os.getenv(
-        "DATABASE_URL",
-        "mysql+pymysql://tree_user:tree_password@localhost:3306/tree_education_uniinfo",
-    )
+    database_url: str = field(default_factory=_database_url)
     headless: bool = _bool("HEADLESS", True)
     block_images: bool = _bool("BLOCK_IMAGES", True)
     request_min_delay: float = float(os.getenv("REQUEST_MIN_DELAY", "1"))

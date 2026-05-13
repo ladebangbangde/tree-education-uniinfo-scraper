@@ -26,9 +26,11 @@ See `docs/crawler-policy.md` for the detailed policy.
 ```text
 tree-education-uniinfo-scraper/
 ├── README.md
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
 ├── requirements.txt
 ├── .env.example
-├── docker-compose.yml
 ├── docs/
 ├── sql/
 └── src/
@@ -54,19 +56,21 @@ playwright install chromium
 cp .env.example .env
 ```
 
-## MySQL startup
+## Docker Compose startup
+
+The project includes a Docker image for the scraper and a Docker Compose MySQL service. Copy `.env.example` to `.env` before running the scraper in Docker.
+
+Database configuration is split into `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. If you run against the MySQL service from `docker-compose.yml`, set `DB_HOST=mysql` and `DB_PORT=3306` in `.env` (or set `DATABASE_URL=mysql+pymysql://tree_user:tree_password@mysql:3306/tree_education_uniinfo`, which takes precedence over the split settings).
 
 ```bash
+cp .env.example .env
 docker compose up -d mysql
+docker compose build scraper
+docker compose run --rm scraper python -m src.main init-db
+docker compose run --rm scraper python -m src.main crawl-universities --country united-kingdom --limit 10
 ```
 
-Optional services are included:
-
-```bash
-docker compose up -d redis adminer
-```
-
-Adminer runs on <http://localhost:8080>.
+The scraper container mounts `./data` to `/app/data`, so snapshots and generated data remain available on the host.
 
 Default MySQL settings:
 
@@ -75,12 +79,45 @@ Default MySQL settings:
 - Password: `tree_password`
 - Root password: `root_password`
 
+
+## PyCharm Docker / Docker Compose run configuration
+
+Use these steps to run the crawler from PyCharm on Windows with Docker Desktop instead of a local Python interpreter:
+
+1. Install and start Docker Desktop.
+2. Open this project directory in PyCharm.
+3. Go to **Settings -> Build, Execution, Deployment -> Docker** and add a Docker Desktop connection.
+4. Copy `.env.example` to `.env`. For the bundled Docker Compose MySQL service, set `DB_HOST=mysql` and `DB_PORT=3306` in `.env`; alternatively, set `DATABASE_URL=mysql+pymysql://tree_user:tree_password@mysql:3306/tree_education_uniinfo` to override the split database settings.
+5. Open the **Services** panel in PyCharm and add/open `docker-compose.yml`.
+6. Start the `mysql` service and wait until its health check is healthy.
+7. Start the `scraper` service. Its default command is:
+
+```bash
+python -m src.main --help
+```
+
+8. To initialize the database, edit the `scraper` service command in PyCharm to run:
+
+```bash
+python -m src.main init-db
+```
+
+9. To run a small crawler job, edit the `scraper` service command to run:
+
+```bash
+python -m src.main crawl-universities --country united-kingdom --limit 10
+```
+
 ## Environment variables
 
-`.env.example` contains:
+`.env.example` contains split database settings:
 
 ```dotenv
-DATABASE_URL=mysql+pymysql://tree_user:tree_password@localhost:3306/tree_education_uniinfo
+DB_HOST=121.41.95.26
+DB_PORT=33306
+DB_NAME=tree_education_uniinfo
+DB_USER=tree_user
+DB_PASSWORD=tree_password
 HEADLESS=true
 REQUEST_MIN_DELAY=1
 REQUEST_MAX_DELAY=3
@@ -88,6 +125,28 @@ CRAWLER_USER_AGENT=Mozilla/5.0 TreeEducationBot/0.1
 SNAPSHOT_DIR=data/snapshots
 BLOCK_IMAGES=true
 REQUEST_TIMEOUT_MS=30000
+```
+
+Database URL compatibility is still supported:
+
+1. If `.env` contains `DATABASE_URL`, the application uses it first.
+2. If `DATABASE_URL` is not set, the application builds `settings.database_url` from `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`.
+3. `src/db.py` continues to create the SQLAlchemy engine from `settings.database_url`.
+
+For the bundled Docker Compose MySQL service, use these split values in `.env`:
+
+```dotenv
+DB_HOST=mysql
+DB_PORT=3306
+DB_NAME=tree_education_uniinfo
+DB_USER=tree_user
+DB_PASSWORD=tree_password
+```
+
+You can also keep a single compatible `DATABASE_URL` in `.env` when needed:
+
+```dotenv
+DATABASE_URL=mysql+pymysql://tree_user:tree_password@mysql:3306/tree_education_uniinfo
 ```
 
 Set `HEADLESS=false` if you need to watch a local debugging browser session.
@@ -175,7 +234,7 @@ Check Docker health and credentials:
 docker compose ps
 ```
 
-Confirm `.env` has the same `DATABASE_URL` as `.env.example`.
+Confirm `.env` points to the database you are actually using. For Docker Compose MySQL, use `DB_HOST=mysql` and `DB_PORT=3306`, or set a compatible `DATABASE_URL` which takes precedence.
 
 ### No rows are extracted
 
@@ -190,7 +249,7 @@ Do not bypass protections. Inspect the saved snapshot if one exists, then update
 
 ## P0 验收步骤
 
-> 验收前请确认 `.env` 中 `DATABASE_URL` 指向可用的 MySQL 8 实例，并已执行 `playwright install chromium`。爬虫保持单线程、低频请求，并在每次请求前检查 `robots.txt`。
+> 验收前请确认 `.env` 中 `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` 指向可用的 MySQL 8 实例；如果设置了 `DATABASE_URL`，则会优先使用 `DATABASE_URL`。同时请确认已执行 `playwright install chromium`。爬虫保持单线程、低频请求，并在每次请求前检查 `robots.txt`。
 
 1. 启动 MySQL：
 
