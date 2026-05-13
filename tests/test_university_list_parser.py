@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from src.sources.bachelorsportal.university_list import build_university_search_url, parse
 
@@ -34,21 +35,80 @@ HTML_FIXTURE = """
 """
 
 
-ACTUAL_TEXT_STYLE_FIXTURE = """
+EMBEDDED_JSON_FIXTURE = """
 <html>
   <body>
-    <ul>
-      <li class="ResultCard">
-        <a href="https://www.mastersportal.com/universities/846/university-of-glasgow.html">
-          University of Glasgow 4.3 (115) Location Multiple locations Attendance Online / On campus Global Ranking 67 Institution type Public Masters 369 Scholarships 39 Visit University Page Global Rank Top 0.5% Featured
+    <script id="__NEXT_DATA__" type="application/json">
+      {
+        "props": {
+          "pageProps": {
+            "universities": [
+              {
+                "name": "JSON University",
+                "url": "https://www.mastersportal.com/universities/999/json-university.html",
+                "location": {"city": "Oxford", "country": "United Kingdom"},
+                "bachelorCount": 88,
+                "scholarshipCount": 12,
+                "reviewCount": 321,
+                "ratingValue": 4.7
+              }
+            ]
+          }
+        }
+      }
+    </script>
+  </body>
+</html>
+"""
+
+
+PARTIAL_JSON_WITH_DOM_FIXTURE = """
+<html>
+  <body>
+    <script id="__NEXT_DATA__" type="application/json">
+      {
+        "props": {
+          "pageProps": {
+            "universities": [
+              {
+                "name": "Card Enriched University",
+                "url": "https://www.mastersportal.com/universities/321/card-enriched-university.html",
+                "country": "United Kingdom",
+                "ratingValue": 4.2
+              }
+            ]
+          }
+        }
+      }
+    </script>
+    <main>
+      <article>
+        <a href="https://www.mastersportal.com/universities/321/card-enriched-university.html">
+          Card Enriched University 4.2 (64) Location Edinburgh, United Kingdom Attendance On campus Bachelor's 25 Scholarships 8 Visit University Page
         </a>
-      </li>
-      <li class="ResultCard">
-        <a href="https://www.mastersportal.com/universities/1311/school-of-advanced-study-university-of-london.html">
-          School of Advanced Study, University of London 5 (1) Location London, United Kingdom Attendance Online / On campus Global Ranking Not ranked Institution type Public Masters 11 Scholarships 39 Visit University Page Featured
+      </article>
+    </main>
+  </body>
+</html>
+"""
+
+
+GLOBAL_SCHOLARSHIP_TEXT_FIXTURE = """
+<html>
+  <body>
+    <aside>39 Scholarships available on the portal</aside>
+    <main>
+      <article>
+        <a href="https://www.mastersportal.com/universities/501/no-scholarship-university.html">
+          No Scholarship University 4.1 (14) Location Bristol, United Kingdom Attendance On campus Bachelor's 20 Visit University Page
         </a>
-      </li>
-    </ul>
+      </article>
+      <article>
+        <a href="https://www.mastersportal.com/universities/502/card-scholarship-university.html">
+          Card Scholarship University 4.0 (9) Location Leeds, United Kingdom Attendance On campus Bachelor's 15 5 Scholarships Visit University Page
+        </a>
+      </article>
+    </main>
   </body>
 </html>
 """
@@ -86,27 +146,90 @@ class UniversityListParserTest(unittest.TestCase):
         self.assertEqual(str(second["rating"]), "4.10")
         self.assertEqual(second["review_count"], 98)
 
-    def test_parse_actual_text_style_cards_from_public_snapshot(self):
-        records = parse(ACTUAL_TEXT_STYLE_FIXTURE, "https://www.mastersportal.com/search/universities/master/united-kingdom")
+    def test_parse_latest_snapshot_style_cards_keeps_bachelorsportal_urls(self):
+        html = Path("tests/fixtures/bachelorsportal_university_list_snapshot.html").read_text(encoding="utf-8")
+        records = parse(html, "https://www.bachelorsportal.com/search/universities/bachelor/united-kingdom")
 
-        self.assertEqual(len(records), 2)
+        self.assertEqual(len(records), 3)
         first = records[0]
         self.assertEqual(first["name"], "University of Glasgow")
         self.assertEqual(first["source_university_id"], "846")
-        self.assertEqual(first["source_url"], "https://www.mastersportal.com/universities/846/university-of-glasgow.html")
+        self.assertEqual(first["source_url"], "https://www.bachelorsportal.com/universities/846/university-of-glasgow.html")
+        self.assertEqual(first["country"], "United Kingdom")
+        self.assertIsNone(first["city"])
         self.assertEqual(first["location_text"], "Multiple locations")
         self.assertEqual(first["bachelor_count"], 369)
-        self.assertEqual(first["scholarship_count"], 39)
+        self.assertIsNone(first["scholarship_count"])
         self.assertEqual(str(first["rating"]), "4.30")
         self.assertEqual(first["review_count"], 115)
 
         second = records[1]
         self.assertEqual(second["name"], "School of Advanced Study, University of London")
-        self.assertEqual(second["source_university_id"], "1311")
+        self.assertEqual(second["source_url"], "https://www.bachelorsportal.com/universities/1311/school-of-advanced-study-university-of-london.html")
         self.assertEqual(second["city"], "London")
         self.assertEqual(second["country"], "United Kingdom")
         self.assertEqual(second["bachelor_count"], 11)
+        self.assertIsNone(second["scholarship_count"])
+        self.assertEqual(str(second["rating"]), "5.00")
         self.assertEqual(second["review_count"], 1)
+
+        third = records[2]
+        self.assertEqual(third["name"], "Teesside University")
+        self.assertEqual(third["city"], "Middlesbrough")
+        self.assertEqual(third["country"], "United Kingdom")
+        self.assertEqual(third["bachelor_count"], 177)
+        self.assertIsNone(third["scholarship_count"])
+        self.assertEqual(str(third["rating"]), "4.40")
+        self.assertEqual(third["review_count"], 75)
+
+    def test_parse_embedded_json_hydration_data_first(self):
+        records = parse(EMBEDDED_JSON_FIXTURE, "https://www.bachelorsportal.com/search/universities/bachelor/united-kingdom")
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["name"], "JSON University")
+        self.assertEqual(record["source_url"], "https://www.bachelorsportal.com/universities/999/json-university.html")
+        self.assertEqual(record["city"], "Oxford")
+        self.assertEqual(record["country"], "United Kingdom")
+        self.assertEqual(record["bachelor_count"], 88)
+        self.assertEqual(record["scholarship_count"], 12)
+        self.assertEqual(record["review_count"], 321)
+        self.assertEqual(str(record["rating"]), "4.70")
+
+    def test_dom_fallback_enriches_partial_json_records(self):
+        records = parse(PARTIAL_JSON_WITH_DOM_FIXTURE, "https://www.bachelorsportal.com/search/universities/bachelor/united-kingdom")
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["name"], "Card Enriched University")
+        self.assertEqual(record["source_url"], "https://www.bachelorsportal.com/universities/321/card-enriched-university.html")
+        self.assertEqual(record["country"], "United Kingdom")
+        self.assertEqual(record["city"], "Edinburgh")
+        self.assertEqual(record["bachelor_count"], 25)
+        self.assertEqual(record["scholarship_count"], 8)
+        self.assertEqual(record["review_count"], 64)
+        self.assertEqual(str(record["rating"]), "4.20")
+
+    def test_global_scholarship_text_is_not_copied_to_cards(self):
+        records = parse(GLOBAL_SCHOLARSHIP_TEXT_FIXTURE, "https://www.bachelorsportal.com/search/universities/bachelor/united-kingdom")
+
+        self.assertEqual(len(records), 2)
+        first = records[0]
+        self.assertEqual(first["name"], "No Scholarship University")
+        self.assertEqual(first["source_url"], "https://www.bachelorsportal.com/universities/501/no-scholarship-university.html")
+        self.assertEqual(first["country"], "United Kingdom")
+        self.assertEqual(first["city"], "Bristol")
+        self.assertEqual(str(first["rating"]), "4.10")
+        self.assertEqual(first["bachelor_count"], 20)
+        self.assertEqual(first["review_count"], 14)
+        self.assertIsNone(first["scholarship_count"])
+
+        second = records[1]
+        self.assertEqual(second["name"], "Card Scholarship University")
+        self.assertEqual(second["city"], "Leeds")
+        self.assertEqual(second["bachelor_count"], 15)
+        self.assertEqual(second["review_count"], 9)
+        self.assertEqual(second["scholarship_count"], 5)
 
 
 if __name__ == "__main__":

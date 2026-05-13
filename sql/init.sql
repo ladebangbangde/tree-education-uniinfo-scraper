@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS programme (
   university_id BIGINT,
   source_programme_id VARCHAR(128),
   source_url VARCHAR(1024),
-  name VARCHAR(255),
+  name VARCHAR(500),
   degree_type VARCHAR(128),
   discipline VARCHAR(255),
   attendance_mode VARCHAR(128),

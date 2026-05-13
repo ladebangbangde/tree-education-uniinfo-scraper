@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 
-CURRENCY_MAP = {"£": "GBP", "$": "USD", "€": "EUR", "GBP": "GBP", "EUR": "EUR", "USD": "USD"}
+CURRENCY_MAP = {"£": "GBP", "$": "USD", "€": "EUR", "GBP": "GBP", "EUR": "EUR", "USD": "USD", "CNY": "CNY"}
 
 
 def normalize_count(text: str | None) -> int | None:
@@ -52,7 +52,7 @@ def normalize_tuition(text: str | None) -> dict[str, Decimal | str | None]:
     result = {"amount": None, "currency": None, "period": None}
     if not text:
         return result
-    currency_match = re.search(r"(GBP|EUR|USD|£|€|\$)", text, re.I)
+    currency_match = re.search(r"(CNY|GBP|EUR|USD|£|€|\$)", text, re.I)
     if currency_match:
         token = currency_match.group(1).upper()
         result["currency"] = CURRENCY_MAP.get(token, CURRENCY_MAP.get(currency_match.group(1), token))
@@ -62,7 +62,7 @@ def normalize_tuition(text: str | None) -> dict[str, Decimal | str | None]:
             result["amount"] = Decimal(amount_match.group(1).replace(",", "")).quantize(Decimal("0.01"))
         except InvalidOperation:
             result["amount"] = None
-    period_match = re.search(r"/(year|yr|month|semester|term)|per\s+(year|month|semester|term)", text, re.I)
+    period_match = re.search(r"/\s*(year|yr|month|semester|term)|per\s+(year|month|semester|term)", text, re.I)
     if period_match:
         period = next(group for group in period_match.groups() if group)
         result["period"] = "year" if period.lower() == "yr" else period.lower()
