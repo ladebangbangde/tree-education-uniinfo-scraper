@@ -3,7 +3,9 @@ import io
 import unittest
 from decimal import Decimal
 
+from src.sources.bachelorsportal.parser import soupify
 from src.sources.bachelorsportal.programme_detail import (
+    _quick_fact_label_value_map,
     parse,
     parse_facts_summary,
     parse_location_fact,
@@ -72,8 +74,10 @@ QUICK_FACT_COMPONENT_HTML = """
       <div class="ValueContainer"><div class="Value">English</div></div>
     </div>
     <div class="QuickFactComponent RowComponent js-quickFactComponent">
-      <div class="Label">Scholarships available</div>
-      <button disabled>Check eligibility</button>
+      <div class="Button">
+        <span class="ScholarshipsAvailableIncentiveLabel">Scholarships available</span>
+        <button disabled>Check eligibility</button>
+      </div>
     </div>
   </body>
 </html>
@@ -168,6 +172,66 @@ class ProgrammeDetailParserTest(unittest.TestCase):
         self.assertEqual(facts["teaching_language"], "English")
         self.assertEqual(facts["scholarships_available"], 1)
 
+    def test_quick_fact_label_map_uses_only_label_and_value_nodes(self):
+        html = """
+            <html><body>
+              <div class="QuickFactComponent">
+                <div class="Label">Tuition fee</div>
+                <div class="ValueContainer">
+                  <div class="Value">
+                    <span class="Title" data-amount="164451">164,451</span>
+                    <span class="CurrencyType">CNY</span>
+                    <span class="Unit">/ year</span>
+                  </div>
+                </div>
+                <div class="Button">
+                  <button class="Label">Scholarships available</button>
+                  <span class="ScholarshipsAvailableIncentiveLabel">Scholarships available</span>
+                </div>
+              </div>
+              <div class="QuickFactComponent">
+                <div class="Label">Duration</div>
+                <div class="ValueContainer"><div class="Value">3 years</div></div>
+              </div>
+              <div class="QuickFactComponent">
+                <div class="Label">Apply date</div>
+                <div class="ValueContainer"><div class="Value">Jun 2026</div></div>
+              </div>
+              <div class="QuickFactComponent">
+                <div class="Label">Start date</div>
+                <div class="ValueContainer"><div class="Value">Sep 2026</div></div>
+              </div>
+              <div class="QuickFactComponent">
+                <div class="Label">Campus location</div>
+                <div class="ValueContainer"><div class="Value">Portsmouth, United Kingdom</div></div>
+              </div>
+              <div class="QuickFactComponent">
+                <div class="Label">Taught in</div>
+                <div class="ValueContainer"><div class="Value">English</div></div>
+              </div>
+            </body></html>
+        """
+
+        label_map = _quick_fact_label_value_map(soupify(html))
+        facts = parse_facts_summary(html)
+
+        self.assertEqual(
+            label_map,
+            {
+                "Tuition fee": "164,451 CNY / year",
+                "Duration": "3 years",
+                "Apply date": "Jun 2026",
+                "Start date": "Sep 2026",
+                "Campus location": "Portsmouth, United Kingdom",
+                "Taught in": "English",
+            },
+        )
+        self.assertEqual(facts["tuition_amount"], Decimal("164451.00"))
+        self.assertEqual(facts["tuition_currency"], "CNY")
+        self.assertEqual(facts["tuition_period"], "year")
+        self.assertEqual(facts["tuition_text_raw"], "164,451 CNY / year")
+        self.assertEqual(facts["scholarships_available"], 1)
+
     def test_quick_fact_tuition_parser_supports_cny_and_ignores_hidden_nodes(self):
         facts = parse_facts_summary(
             """
@@ -175,9 +239,11 @@ class ProgrammeDetailParserTest(unittest.TestCase):
               <div class="QuickFactComponent RowComponent js-quickFactComponent">
                 <div class="Label">Tuition fee</div>
                 <div class="ValueContainer">
-                  <div class="TuitionFeeContainer">
-                    <span data-currency="CNY">280,343 CNY / year</span>
-                    <span class="Hidden Unknown js-notAvailable">Unknown</span>
+                  <div class="Value">
+                    <div class="TuitionFeeContainer">
+                      <span data-currency="CNY">280,343 CNY / year</span>
+                      <span class="Hidden Unknown js-notAvailable">Unknown</span>
+                    </div>
                   </div>
                 </div>
               </div>
