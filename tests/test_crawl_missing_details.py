@@ -13,7 +13,7 @@ def test_crawl_missing_details_continues_and_records_failures(monkeypatch, capsy
     monkeypatch.setattr(crawl_missing_details_module, "_load_missing_detail_programmes", lambda limit: programmes)
     monkeypatch.setattr(crawl_missing_details_module, "record_failed_task", lambda **kwargs: failures.append(kwargs))
 
-    def fake_crawl_programme_detail(programme_id: int) -> bool:
+    def fake_crawl_programme_detail(programme_id: int, record_failure: bool = True) -> bool:
         if programme_id == 3:
             raise TimeoutError("detail timeout")
         return programme_id == 1

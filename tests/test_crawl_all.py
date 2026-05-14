@@ -29,7 +29,7 @@ def test_crawl_all_continues_after_university_and_programme_failures(monkeypatch
             raise RuntimeError("programme list boom")
         return 3
 
-    def fake_crawl_programme_detail(programme_id: int) -> bool:
+    def fake_crawl_programme_detail(programme_id: int, record_failure: bool = True) -> bool:
         return programme_id == 10
 
     monkeypatch.setattr(crawl_all_module, "crawl_programmes", fake_crawl_programmes)

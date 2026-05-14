@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select
 
@@ -17,6 +19,7 @@ from ..pipelines.persist import (
     upsert_programme_intake,
 )
 from ..sources.bachelorsportal.programme_detail import parse
+from .failed_tasks import record_failed_task
 
 
 def _now() -> datetime:
@@ -40,6 +43,17 @@ FACT_PROGRAMME_FIELDS = (
 )
 
 
+KEY_FIELD_LABELS = {
+    "tuition_amount": "tuition",
+    "duration_value": "duration",
+    "apply_date_text": "apply_date",
+    "start_date_text": "start_date",
+    "city": "city",
+    "country": "country",
+    "teaching_language": "teaching_language",
+}
+
+
 FACTS_DIAG_KEYWORDS = (
     "Tuition fee",
     "Duration",
@@ -49,6 +63,18 @@ FACTS_DIAG_KEYWORDS = (
     "Taught in",
     "Scholarships available",
 )
+
+
+INVALID_SNAPSHOT_KEYWORDS = (
+    "Tuition fee",
+    "Duration",
+    "Apply date",
+    "Start date",
+    "Taught in",
+)
+
+
+INVALID_SNAPSHOT_MESSAGE = "QuickFacts missing or invalid snapshot"
 
 
 def _facts_diag_context(html_text: str, keyword: str, context_chars: int = 300) -> str:
@@ -84,51 +110,142 @@ def _location_parts(location_text: str | None) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _has_quick_facts(html_text: str) -> bool:
+    return bool(re.search(r"QuickFacts?|QuickFactComponent|quickFact|quick-fact", html_text))
+
+
+def _invalid_snapshot_reasons(html_text: str, facts: dict[str, Any]) -> list[str]:
+    reasons = []
+    if len(html_text) < 80_000:
+        reasons.append("html_length_lt_80000")
+    if not facts:
+        reasons.append("facts_keys_empty")
+    if not _has_quick_facts(html_text):
+        reasons.append("quickfacts_missing")
+    if not any(keyword in html_text for keyword in INVALID_SNAPSHOT_KEYWORDS):
+        reasons.append("all_core_fact_labels_missing")
+    return reasons
+
+
+def _existing_values(programme: Programme) -> dict[str, Any]:
+    return {field: getattr(programme, field, None) for field in FACT_PROGRAMME_FIELDS}
+
+
 def _safe_programme_updates(
     parsed: dict,
     source_hash: str,
     crawled_at: datetime,
     existing_city: str | None = None,
     existing_country: str | None = None,
+    existing_values: dict[str, Any] | None = None,
 ) -> dict:
-    # The top facts card is the authority for these detail facts. Persist NULL
-    # for missing facts instead of preserving stale values from earlier crawls.
-    data = {field: parsed.get(field) for field in FACT_PROGRAMME_FIELDS}
+    existing_values = dict(existing_values or {})
+    if existing_city is not None:
+        existing_values.setdefault("city", existing_city)
+    if existing_country is not None:
+        existing_values.setdefault("country", existing_country)
 
+    parsed_values = dict(parsed)
     raw_location = (parsed.get("_raw_facts") or {}).get("location")
     city_from_location, country_from_location = _location_parts(raw_location)
-    if not data.get("city") and city_from_location:
-        data["city"] = city_from_location
-    if not data.get("country") and country_from_location:
-        data["country"] = country_from_location
+    if not parsed_values.get("city") and city_from_location:
+        parsed_values["city"] = city_from_location
+    if not parsed_values.get("country") and country_from_location:
+        parsed_values["country"] = country_from_location
 
-    # Location facts should supplement existing rows, not overwrite a value that
-    # was already populated by the programme-list crawl or a previous detail run.
-    if existing_city:
-        data.pop("city", None)
-    if existing_country:
-        data.pop("country", None)
+    logger.info(
+        "parsed_location_raw={} parsed_city={} parsed_country={}",
+        raw_location,
+        parsed_values.get("city"),
+        parsed_values.get("country"),
+    )
 
-    data["detail_crawled_at"] = crawled_at
+    data: dict[str, Any] = {}
+    for field in FACT_PROGRAMME_FIELDS:
+        value = parsed_values.get(field)
+        if value is None:
+            continue
+        if field in {"city", "country"} and existing_values.get(field):
+            continue
+        data[field] = value
+
     data["detail_source_hash"] = source_hash
     return data
 
 
-def crawl_programme_detail(programme_id: int) -> bool:
+def _effective_detail_values(programme: Programme, updates: dict[str, Any]) -> dict[str, Any]:
+    values = {field: getattr(programme, field, None) for field in KEY_FIELD_LABELS}
+    for field in KEY_FIELD_LABELS:
+        if field in updates and updates[field] is not None:
+            values[field] = updates[field]
+    return values
+
+
+def _missing_key_fields(values: dict[str, Any]) -> list[str]:
+    return [label for field, label in KEY_FIELD_LABELS.items() if values.get(field) in (None, "")]
+
+
+def _record_detail_failure(
+    *,
+    programme_id: int,
+    programme_name: str | None,
+    source_url: str | None,
+    error_type: str,
+    error_message: str,
+) -> None:
+    record_failed_task(
+        task_type="programme_detail",
+        source_id=programme_id,
+        source_name=programme_name,
+        source_url=source_url,
+        error_type=error_type,
+        error_message=error_message,
+    )
+
+
+def _mark_programme_detail_failed(programme_id: int, error_message: str, source_hash: str | None = None) -> None:
+    now = _now()
     with session_scope() as session:
         programme = session.execute(select(Programme).where(Programme.id == programme_id)).scalar_one_or_none()
         if not programme:
-            raise ValueError(f"Programme {programme_id} not found")
-        if not programme.source_url:
-            raise ValueError(f"Programme {programme_id} is missing source_url")
-        source_url = programme.source_url
-        programme_name = programme.name
+            return
+        programme.detail_status = "failed"
+        programme.detail_missing_fields = None
+        programme.detail_error_message = error_message
+        programme.detail_crawled_at = None
+        if source_hash:
+            programme.detail_source_hash = source_hash
+        programme.updated_at = now
+        session.add(programme)
 
+
+def crawl_programme_detail(programme_id: int, *, record_failure: bool = True) -> bool:
+    source_url: str | None = None
+    programme_name: str | None = None
     try:
+        with session_scope() as session:
+            programme = session.execute(select(Programme).where(Programme.id == programme_id)).scalar_one_or_none()
+            if not programme:
+                raise ValueError(f"Programme {programme_id} not found")
+            if not programme.source_url:
+                raise ValueError(f"Programme {programme_id} is missing source_url")
+            source_url = programme.source_url
+            programme_name = programme.name
+
         with BrowserClient() as browser:
             result = browser.fetch(source_url)
         if result is None:
-            logger.warning("Programme detail fetch disallowed by robots.txt: programme_id={}, source_url={}", programme_id, source_url)
+            error_message = "Programme detail fetch disallowed by robots.txt"
+            logger.warning("{}: programme_id={}, source_url={}", error_message, programme_id, source_url)
+            _mark_programme_detail_failed(programme_id, error_message)
+            if record_failure:
+                _record_detail_failure(
+                    programme_id=programme_id,
+                    programme_name=programme_name,
+                    source_url=source_url,
+                    error_type="RobotsDisallowed",
+                    error_message=error_message,
+                )
             return False
 
         html_text = result.html or ""
@@ -137,17 +254,48 @@ def crawl_programme_detail(programme_id: int) -> bool:
         source_hash, path = save_html_snapshot(html_text, settings.source_site)
         logger.info("Saved programme detail snapshot {}", path)
         parsed = parse(html_text, result.final_url)
-        parsed_facts = parsed.get("facts", {})
+        parsed_facts = parsed.get("facts", {}) or {}
+        facts_keys = sorted(parsed_facts.keys())
+        logger.info(
+            "programme_detail_snapshot programme_id={} url={} final_url={} html_length={} facts_keys={} quickfacts_present={}",
+            programme_id,
+            source_url,
+            result.final_url,
+            len(html_text),
+            facts_keys,
+            _has_quick_facts(html_text),
+        )
         if not parsed_facts:
             logger.warning(
                 "Programme detail facts summary block was not parsed: programme_id={}, source_url={}, html_length={}",
                 programme_id,
                 source_url,
-                len(result.html or ""),
+                len(html_text),
             )
         logger.info("parsed_facts programme_id={} parsed_facts={}", programme_id, parsed["programme"])
-        now = _now()
 
+        invalid_reasons = _invalid_snapshot_reasons(html_text, parsed_facts)
+        if invalid_reasons:
+            error_message = INVALID_SNAPSHOT_MESSAGE
+            logger.warning(
+                "Programme detail invalid snapshot: programme_id={} reasons={} html_length={} facts_keys={}",
+                programme_id,
+                invalid_reasons,
+                len(html_text),
+                facts_keys,
+            )
+            _mark_programme_detail_failed(programme_id, error_message, source_hash=source_hash)
+            if record_failure:
+                _record_detail_failure(
+                    programme_id=programme_id,
+                    programme_name=programme_name,
+                    source_url=source_url,
+                    error_type="InvalidSnapshot",
+                    error_message=error_message,
+                )
+            return False
+
+        now = _now()
         with session_scope() as session:
             programme = session.execute(select(Programme).where(Programme.id == programme_id)).scalar_one()
             if programme.name and len(programme.name) > 500:
@@ -157,12 +305,19 @@ def crawl_programme_detail(programme_id: int) -> bool:
                 parsed["programme"],
                 source_hash,
                 now,
-                existing_city=programme.city,
-                existing_country=programme.country,
+                existing_values=_existing_values(programme),
             )
+            effective_values = _effective_detail_values(programme, updates)
+            missing_fields = _missing_key_fields(effective_values)
+            detail_status = "complete" if not missing_fields else "incomplete"
+
             for key, value in updates.items():
                 if hasattr(programme, key):
                     setattr(programme, key, value)
+            programme.detail_status = detail_status
+            programme.detail_missing_fields = ",".join(missing_fields) if missing_fields else None
+            programme.detail_error_message = None
+            programme.detail_crawled_at = now if detail_status == "complete" else None
             programme.updated_at = now
             session.add(programme)
             session.flush()
@@ -185,7 +340,7 @@ def crawl_programme_detail(programme_id: int) -> bool:
                 requirement["programme_id"] = programme_id
                 upsert_application_requirement(session, requirement)
 
-        programme_fields = parsed["programme"]
+        programme_fields = {**parsed["programme"], **effective_values}
         tuition = (
             f"{programme_fields.get('tuition_amount')} {programme_fields.get('tuition_currency')}/"
             f"{programme_fields.get('tuition_period')}"
@@ -203,7 +358,7 @@ def crawl_programme_detail(programme_id: int) -> bool:
         logger.info(
             "Parsed programme detail:\nprogramme_id={}\nprogramme_name={}\nsource_url={}\n"
             "tuition={}\nduration={}\napply_date={}\nstart_date={}\nlocation={}\n"
-            "teaching_language={}\nscholarships_available={}\nsource_hash={}",
+            "teaching_language={}\nscholarships_available={}\ndetail_status={}\nmissing_fields={}\nsource_hash={}",
             programme_id,
             programme_name,
             source_url,
@@ -214,9 +369,20 @@ def crawl_programme_detail(programme_id: int) -> bool:
             location,
             programme_fields.get("teaching_language"),
             programme_fields.get("scholarships_available") == 1,
+            detail_status,
+            missing_fields,
             source_hash,
         )
-        return True
+        return detail_status == "complete"
     except Exception as exc:
         logger.exception("Programme detail crawl failed: programme_id={}, source_url={}, error={}", programme_id, source_url, exc)
+        _mark_programme_detail_failed(programme_id, str(exc))
+        if record_failure:
+            _record_detail_failure(
+                programme_id=programme_id,
+                programme_name=programme_name,
+                source_url=source_url,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
         return False

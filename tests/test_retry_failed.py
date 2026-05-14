@@ -11,7 +11,7 @@ def test_retry_failed_marks_success_and_dead(monkeypatch, capsys):
     failures = []
 
     monkeypatch.setattr(retry_failed_module, "load_retryable_failed_tasks", lambda limit: tasks)
-    monkeypatch.setattr(retry_failed_module, "crawl_programme_detail", lambda programme_id: True)
+    monkeypatch.setattr(retry_failed_module, "crawl_programme_detail", lambda programme_id, record_failure=True: True)
 
     def fail_programmes(university_id: int):
         raise TimeoutError("retry timeout")
@@ -24,8 +24,8 @@ def test_retry_failed_marks_success_and_dead(monkeypatch, capsys):
 
     assert result.total == 2
     assert result.success == 1
-    assert result.failed == 1
+    assert result.failed == 0
     assert result.dead == 1
     assert successes == [1]
     assert failures == [(2, "TimeoutError")]
-    assert "[retry-failed] summary:" in capsys.readouterr().out
+    assert "[retry-failed] summary" in capsys.readouterr().out

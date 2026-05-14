@@ -6,6 +6,7 @@ from .logger import logger
 # Import models so metadata is populated for create-tables.
 from . import models  # noqa: F401
 from .tasks.crawl_all import crawl_all as crawl_all_task
+from .tasks.crawl_incomplete_details import crawl_incomplete_details as crawl_incomplete_details_task
 from .tasks.crawl_missing_details import crawl_missing_details as crawl_missing_details_task
 from .tasks.crawl_programmes import crawl_programmes as crawl_programmes_task
 from .tasks.crawl_programme_detail import crawl_programme_detail as crawl_programme_detail_task
@@ -69,6 +70,17 @@ def crawl_all(
         f"programmes_failed={result.programmes_failed}, "
         f"details_success={result.details_success}, "
         f"details_failed={result.details_failed}"
+    )
+
+
+@app.command("crawl-incomplete-details")
+def crawl_incomplete_details(limit: int = typer.Option(100, min=1)) -> None:
+    result = crawl_incomplete_details_task(limit=limit)
+    typer.echo(
+        "crawl-incomplete-details completed: "
+        f"total={result.total}, "
+        f"success={result.success}, "
+        f"failed={result.failed}"
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import datetime
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..db import Base
 
@@ -29,6 +29,9 @@ class Programme(Base):
     apply_date_text: Mapped[str | None] = mapped_column(String(128))
     start_date_text: Mapped[str | None] = mapped_column(String(128))
     teaching_language: Mapped[str | None] = mapped_column(String(128))
+    detail_status: Mapped[str | None] = mapped_column(String(32), default="pending", server_default=text("'pending'"))
+    detail_missing_fields: Mapped[str | None] = mapped_column(String(512))
+    detail_error_message: Mapped[str | None] = mapped_column(Text)
     detail_crawled_at: Mapped[datetime | None] = mapped_column(DateTime)
     detail_source_hash: Mapped[str | None] = mapped_column(String(64))
     duration_text_raw: Mapped[str | None] = mapped_column(String(255))

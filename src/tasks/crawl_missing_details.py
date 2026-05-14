@@ -57,7 +57,7 @@ def crawl_missing_details(limit: int) -> CrawlMissingDetailsResult:
             f"id={programme.id}, university_id={programme.university_id}, name={programme.name}"
         )
         try:
-            success = crawl_programme_detail(programme_id=programme.id)
+            success = crawl_programme_detail(programme_id=programme.id, record_failure=False)
             if success:
                 success_count += 1
                 print(
