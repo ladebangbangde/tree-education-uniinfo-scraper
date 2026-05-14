@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 from decimal import Decimal
 
@@ -21,6 +23,58 @@ DETAIL_HTML = """
       <div><span>Campus location</span>: <strong>Bath, United Kingdom</strong></div>
       <div><span>Taught in</span>: <strong>English</strong></div>
     </aside>
+  </body>
+</html>
+"""
+
+
+QUICK_FACT_COMPONENT_HTML = """
+<html>
+  <body>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Tuition fee</div>
+      <div class="ValueContainer">
+        <div class="Value">
+          <div class="TuitionFeeContainer">
+            <span data-currency="GBP">24,224 USD / year</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Duration</div>
+      <div class="ValueContainer"><div class="Value">3 years</div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Apply date</div>
+      <div class="ValueContainer">
+        <div class="Value">
+          <time datetime="2026-06-30">Jun 2026</time>
+          <div class="TimingContainer js-notAvailable Unknown Hidden">Unknown</div>
+        </div>
+      </div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Start date</div>
+      <div class="ValueContainer">
+        <div class="Value">
+          <time datetime="2026-09-01">Sep 2026</time>
+          <div class="TimingContainer js-notAvailable Unknown Hidden">Unknown</div>
+        </div>
+      </div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Campus location</div>
+      <div class="ValueContainer"><div class="Value">Portsmouth, United Kingdom</div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Taught in</div>
+      <div class="ValueContainer"><div class="Value">English</div></div>
+    </div>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Label">Scholarships available</div>
+      <button disabled>Check eligibility</button>
+    </div>
   </body>
 </html>
 """
@@ -97,6 +151,79 @@ class ProgrammeDetailParserTest(unittest.TestCase):
         self.assertEqual(facts["country"], "United Kingdom")
         self.assertEqual(facts["teaching_language"], "English")
         self.assertEqual(facts["scholarships_available"], 1)
+
+    def test_quick_fact_components_ignore_hidden_unknown_and_parse_tuition_scholarships(self):
+        facts = parse_facts_summary(QUICK_FACT_COMPONENT_HTML)
+
+        self.assertEqual(facts["tuition_amount"], Decimal("24224.00"))
+        self.assertEqual(facts["tuition_currency"], "USD")
+        self.assertEqual(facts["tuition_period"], "year")
+        self.assertEqual(facts["tuition_text_raw"], "24,224 USD / year")
+        self.assertEqual(facts["duration_value"], 3)
+        self.assertEqual(facts["duration_unit"], "year")
+        self.assertEqual(facts["apply_date_text"], "Jun 2026")
+        self.assertEqual(facts["start_date_text"], "Sep 2026")
+        self.assertEqual(facts["city"], "Portsmouth")
+        self.assertEqual(facts["country"], "United Kingdom")
+        self.assertEqual(facts["teaching_language"], "English")
+        self.assertEqual(facts["scholarships_available"], 1)
+
+    def test_quick_fact_tuition_parser_supports_cny_and_ignores_hidden_nodes(self):
+        facts = parse_facts_summary(
+            """
+            <html><body>
+              <div class="QuickFactComponent RowComponent js-quickFactComponent">
+                <div class="Label">Tuition fee</div>
+                <div class="ValueContainer">
+                  <div class="TuitionFeeContainer">
+                    <span data-currency="CNY">280,343 CNY / year</span>
+                    <span class="Hidden Unknown js-notAvailable">Unknown</span>
+                  </div>
+                </div>
+              </div>
+            </body></html>
+            """
+        )
+
+        self.assertEqual(facts["tuition_amount"], Decimal("280343.00"))
+        self.assertEqual(facts["tuition_currency"], "CNY")
+        self.assertEqual(facts["tuition_period"], "year")
+        self.assertEqual(facts["tuition_text_raw"], "280,343 CNY / year")
+
+    def test_quick_fact_tuition_uses_original_html_when_visible_text_has_no_amount(self):
+        html = """
+            <html><body>
+              <div class="QuickFactComponent RowComponent js-quickFactComponent">
+                <div class="Label">Tuition fee</div>
+                <div class="ValueContainer">
+                  <div class="Value">
+                    <span data-currency="GBP" data-original_html="17,900 GBP">View fees</span>
+                    <span class="Unit">/ year</span>
+                    <span class="Hidden Unknown js-notAvailable">Unknown</span>
+                  </div>
+                </div>
+              </div>
+            </body></html>
+        """
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            facts = parse_facts_summary(html)
+
+        self.assertIn('class="QuickFactComponent RowComponent js-quickFactComponent"', stdout.getvalue())
+        self.assertIn('data-original_html="17,900 GBP"', stdout.getvalue())
+        self.assertEqual(facts["tuition_amount"], Decimal("17900.00"))
+        self.assertEqual(facts["tuition_currency"], "GBP")
+        self.assertEqual(facts["tuition_period"], "year")
+        self.assertEqual(facts["tuition_text_raw"], "17,900 GBP / year")
+
+    def test_tuition_parser_supports_gbp_year_values(self):
+        parsed = parse_tuition_fact("17,900 GBP / year")
+
+        self.assertEqual(parsed["amount"], Decimal("17900.00"))
+        self.assertEqual(parsed["currency"], "GBP")
+        self.assertEqual(parsed["period"], "year")
+        self.assertEqual(parsed["raw"], "17,900 GBP / year")
 
     def test_facts_summary_does_not_parse_unscoped_overview_text(self):
         facts = parse_facts_summary(

@@ -49,6 +49,164 @@ MONTHS = {
     "dec": 12,
 }
 
+HIDDEN_VALUE_SELECTORS = ".Hidden, .Unknown, .js-notAvailable"
+TUITION_VALUE_RE = re.compile(
+    r"\b(\d[\d,]*(?:\.\d+)?)\s+(USD|GBP|CNY|EUR)\s*/\s*(year|yr|month|semester|term)\b",
+    re.I,
+)
+
+
+def _text_without_hidden_value_nodes(node) -> str | None:
+    """Return node text after removing known hidden/unavailable value markers."""
+    if node is None:
+        return None
+    fragment = soupify(str(node))
+    for hidden in fragment.select(HIDDEN_VALUE_SELECTORS):
+        hidden.decompose()
+    return clean_text(fragment.get_text(" "))
+
+
+def _extract_tuition_fee_text(text: str | None) -> str | None:
+    """Extract a single tuition fee phrase from noisy QuickFact text."""
+    cleaned = clean_text(text)
+    if not cleaned:
+        return None
+    match = TUITION_VALUE_RE.search(cleaned)
+    if not match:
+        return cleaned
+    amount, currency, period = match.groups()
+    period = "year" if period.lower() == "yr" else period.lower()
+    return f"{amount} {currency.upper()} / {period}"
+
+
+def _tuition_has_amount(text: str | None) -> bool:
+    return normalize_tuition(text)["amount"] is not None
+
+
+def _tuition_has_currency(text: str | None) -> bool:
+    return normalize_tuition(text)["currency"] is not None
+
+
+def _tuition_has_period(text: str | None) -> bool:
+    return normalize_tuition(text)["period"] is not None
+
+
+def _tuition_text_with_currency(text: str | None, currency: str | None) -> str | None:
+    cleaned = clean_text(text)
+    if not cleaned or not currency or _tuition_has_currency(cleaned):
+        return cleaned
+    amount_match = re.search(r"\d[\d,]*(?:\.\d+)?", cleaned)
+    if not amount_match:
+        return cleaned
+    start, end = amount_match.span()
+    return clean_text(f"{cleaned[:end]} {currency.upper()} {cleaned[end:]}")
+
+
+def _tuition_text_with_unit(text: str | None, unit: str | None) -> str | None:
+    cleaned = clean_text(text)
+    unit_text = clean_text(unit)
+    if not cleaned or not unit_text or _tuition_has_period(cleaned):
+        return cleaned
+    return clean_text(f"{cleaned} {unit_text}")
+
+
+def _valid_tuition_text(text: str | None) -> str | None:
+    tuition_text = _extract_tuition_fee_text(text)
+    if (
+        tuition_text
+        and _tuition_has_amount(tuition_text)
+        and _tuition_has_currency(tuition_text)
+        and _tuition_has_period(tuition_text)
+    ):
+        return tuition_text
+    return None
+
+
+def _quick_fact_tuition_text(component) -> str | None:
+    """Extract tuition from the Tuition fee QuickFact value area."""
+    print(component.prettify())
+    unit_values = [_text_without_hidden_value_nodes(node) for node in component.select("span.Unit")]
+    unit_text = clean_text(" ".join(filter(None, unit_values)))
+
+    for selector in [".Value", ".ValueContainer", ".TuitionFeeContainer"]:
+        value_node = component.select_one(selector)
+        text = _tuition_text_with_unit(_text_without_hidden_value_nodes(value_node), unit_text)
+        tuition_text = _valid_tuition_text(text)
+        if tuition_text:
+            return tuition_text
+
+    for span in component.select("span[data-currency]"):
+        text = _tuition_text_with_currency(_text_without_hidden_value_nodes(span), span.get("data-currency"))
+        text = _tuition_text_with_unit(text, unit_text)
+        tuition_text = _valid_tuition_text(text)
+        if tuition_text:
+            return tuition_text
+
+    for span in component.select("span[data-original_html]"):
+        text = _tuition_text_with_currency(span.get("data-original_html"), span.get("data-currency"))
+        text = _tuition_text_with_unit(text, unit_text)
+        tuition_text = _valid_tuition_text(text)
+        if tuition_text:
+            return tuition_text
+
+    return None
+
+
+def _quick_fact_value_text(component) -> str | None:
+    """Extract visible value text from a Bachelorsportal QuickFactComponent."""
+    for selector in [".Value", ".ValueContainer", ".TuitionFeeContainer", '[class*="Value" i]']:
+        value_node = component.select_one(selector)
+        text = _text_without_hidden_value_nodes(value_node)
+        if text:
+            return text
+    label_node = component.select_one(".Label")
+    fragment = soupify(str(component))
+    for hidden in fragment.select(f"{HIDDEN_VALUE_SELECTORS}, .Label"):
+        hidden.decompose()
+    text = clean_text(fragment.get_text(" "))
+    label = clean_text(label_node.get_text(" ")) if label_node else None
+    if text and label and text.lower().startswith(label.lower()):
+        text = clean_text(text[len(label) :])
+    return text
+
+
+def _quick_fact_label_value_map(soup) -> dict[str, str | None]:
+    """Map QuickFactComponent labels to their visible values."""
+    label_map: dict[str, str | None] = {}
+    for component in soup.select(".QuickFactComponent"):
+        label_node = component.select_one(".Label")
+        label = clean_text(label_node.get_text(" ")) if label_node else None
+        component_text = _text_without_hidden_value_nodes(component) or ""
+        if not label and re.search(r"\bscholarships?\s+available\b", component_text, re.I):
+            label = "Scholarships available"
+        if not label:
+            continue
+        value = (
+            _quick_fact_tuition_text(component)
+            if _label_key(label) == "tuition"
+            else _quick_fact_value_text(component)
+        )
+        if re.fullmatch(r"scholarships?\s+available", label, re.I) or re.search(
+            r"\bscholarships?\s+available\b", component_text, re.I
+        ):
+            label_map.setdefault("Scholarships available", value or "Scholarships available")
+            continue
+        label_map.setdefault(label, value)
+    logger.info("parsed_label_map={}", label_map)
+    return label_map
+
+
+def _facts_from_quick_fact_components(soup) -> dict[str, str | None]:
+    label_map = _quick_fact_label_value_map(soup)
+    facts: dict[str, str | None] = {}
+    for label, value in label_map.items():
+        key = _label_key(label)
+        if key:
+            facts.setdefault(key, value)
+        elif re.fullmatch(r"scholarships?\s+available", label, re.I):
+            facts.setdefault("scholarship", label)
+    return facts
+
 
 def parse_tuition_fact(value: str | None) -> dict[str, Decimal | str | None]:
     """Parse a tuition fact such as ``41,275 USD / year``."""
@@ -212,6 +370,10 @@ def _facts_from_container(container) -> dict[str, str | None]:
 
 
 def _first_fact_map(soup) -> dict[str, str | None]:
+    quick_facts = _facts_from_quick_fact_components(soup)
+    if quick_facts:
+        return quick_facts
+
     merged: dict[str, str | None] = {}
     for container in _fact_containers(soup):
         for key, value in _facts_from_container(container).items():
@@ -232,6 +394,9 @@ def parse_facts_summary(html: str) -> dict[str, Any]:
     location = parse_location_fact(facts.get("location"))
     teaching_language = parse_teaching_language_fact(facts.get("teaching_language"))
     scholarships_available = parse_scholarship_fact(facts.get("scholarship"))
+    logger.info("parsed_tuition={}", tuition)
+    logger.info("parsed_dates={}", {"apply_date": apply_date, "start_date": start_date})
+    logger.info("parsed_scholarships={}", scholarships_available is True)
     summary = {
         "tuition_amount": tuition["amount"],
         "tuition_currency": tuition["currency"],
