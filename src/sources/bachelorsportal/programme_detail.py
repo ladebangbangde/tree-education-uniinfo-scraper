@@ -50,6 +50,10 @@ MONTHS = {
 }
 
 HIDDEN_VALUE_SELECTORS = ".Hidden, .Unknown, .js-notAvailable"
+TUITION_VALUE_RE = re.compile(
+    r"\b(\d[\d,]*(?:\.\d+)?)\s+(USD|GBP|CNY|EUR)\s*/\s*(year|yr|month|semester|term)\b",
+    re.I,
+)
 
 
 def _text_without_hidden_value_nodes(node) -> str | None:
@@ -60,6 +64,48 @@ def _text_without_hidden_value_nodes(node) -> str | None:
     for hidden in fragment.select(HIDDEN_VALUE_SELECTORS):
         hidden.decompose()
     return clean_text(fragment.get_text(" "))
+
+
+def _extract_tuition_fee_text(text: str | None) -> str | None:
+    """Extract a single tuition fee phrase from noisy QuickFact text."""
+    cleaned = clean_text(text)
+    if not cleaned:
+        return None
+    match = TUITION_VALUE_RE.search(cleaned)
+    if not match:
+        return cleaned
+    amount, currency, period = match.groups()
+    period = "year" if period.lower() == "yr" else period.lower()
+    return f"{amount} {currency.upper()} / {period}"
+
+
+def _quick_fact_tuition_text(component) -> str | None:
+    """Extract tuition from the Tuition fee QuickFact value area."""
+    logger.info("tuition_component_raw_html={}", str(component))
+    candidate_nodes = []
+    for selector in [
+        ".TuitionFeeContainer",
+        ".ValueContainer span",
+        ".Value span",
+        "span[data-currency]",
+        ".Value",
+        ".ValueContainer",
+    ]:
+        candidate_nodes.extend(component.select(selector))
+    if not candidate_nodes:
+        candidate_nodes.append(component)
+
+    seen: set[int] = set()
+    for node in candidate_nodes:
+        node_id = id(node)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        text = _text_without_hidden_value_nodes(node)
+        tuition_text = _extract_tuition_fee_text(text)
+        if tuition_text and normalize_tuition(tuition_text)["amount"] is not None:
+            return tuition_text
+    return None
 
 
 def _quick_fact_value_text(component) -> str | None:
@@ -91,7 +137,11 @@ def _quick_fact_label_value_map(soup) -> dict[str, str | None]:
             label = "Scholarships available"
         if not label:
             continue
-        value = _quick_fact_value_text(component)
+        value = (
+            _quick_fact_tuition_text(component)
+            if _label_key(label) == "tuition"
+            else _quick_fact_value_text(component)
+        )
         if re.fullmatch(r"scholarships?\s+available", label, re.I) or re.search(
             r"\bscholarships?\s+available\b", component_text, re.I
         ):
