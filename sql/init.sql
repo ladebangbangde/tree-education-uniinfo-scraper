@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS programme (
   apply_date_text VARCHAR(128) NULL,
   start_date_text VARCHAR(128) NULL,
   teaching_language VARCHAR(128) NULL,
+  detail_status VARCHAR(32) DEFAULT 'pending',
+  detail_missing_fields VARCHAR(512) NULL,
+  detail_error_message TEXT NULL,
   detail_crawled_at DATETIME NULL,
   detail_source_hash VARCHAR(64) NULL,
   duration_text_raw VARCHAR(255),
@@ -230,4 +233,19 @@ CREATE TABLE IF NOT EXISTS university_review_summary (
   updated_at DATETIME,
   UNIQUE KEY uq_review_summary_university (university_id),
   CONSTRAINT fk_review_university FOREIGN KEY (university_id) REFERENCES university(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crawl_failed_task (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  task_type VARCHAR(64) NOT NULL,
+  source_id BIGINT NULL,
+  source_name VARCHAR(255) NULL,
+  source_url VARCHAR(1024) NULL,
+  error_type VARCHAR(128) NULL,
+  error_message TEXT NULL,
+  retry_count INT DEFAULT 0,
+  status VARCHAR(32) DEFAULT 'failed',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_failed_task_active (task_type, source_id, source_url, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
