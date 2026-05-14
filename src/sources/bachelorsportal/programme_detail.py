@@ -79,32 +79,76 @@ def _extract_tuition_fee_text(text: str | None) -> str | None:
     return f"{amount} {currency.upper()} / {period}"
 
 
+def _tuition_has_amount(text: str | None) -> bool:
+    return normalize_tuition(text)["amount"] is not None
+
+
+def _tuition_has_currency(text: str | None) -> bool:
+    return normalize_tuition(text)["currency"] is not None
+
+
+def _tuition_has_period(text: str | None) -> bool:
+    return normalize_tuition(text)["period"] is not None
+
+
+def _tuition_text_with_currency(text: str | None, currency: str | None) -> str | None:
+    cleaned = clean_text(text)
+    if not cleaned or not currency or _tuition_has_currency(cleaned):
+        return cleaned
+    amount_match = re.search(r"\d[\d,]*(?:\.\d+)?", cleaned)
+    if not amount_match:
+        return cleaned
+    start, end = amount_match.span()
+    return clean_text(f"{cleaned[:end]} {currency.upper()} {cleaned[end:]}")
+
+
+def _tuition_text_with_unit(text: str | None, unit: str | None) -> str | None:
+    cleaned = clean_text(text)
+    unit_text = clean_text(unit)
+    if not cleaned or not unit_text or _tuition_has_period(cleaned):
+        return cleaned
+    return clean_text(f"{cleaned} {unit_text}")
+
+
+def _valid_tuition_text(text: str | None) -> str | None:
+    tuition_text = _extract_tuition_fee_text(text)
+    if (
+        tuition_text
+        and _tuition_has_amount(tuition_text)
+        and _tuition_has_currency(tuition_text)
+        and _tuition_has_period(tuition_text)
+    ):
+        return tuition_text
+    return None
+
+
 def _quick_fact_tuition_text(component) -> str | None:
     """Extract tuition from the Tuition fee QuickFact value area."""
-    logger.info("tuition_component_raw_html={}", str(component))
-    candidate_nodes = []
-    for selector in [
-        ".TuitionFeeContainer",
-        ".ValueContainer span",
-        ".Value span",
-        "span[data-currency]",
-        ".Value",
-        ".ValueContainer",
-    ]:
-        candidate_nodes.extend(component.select(selector))
-    if not candidate_nodes:
-        candidate_nodes.append(component)
+    print(component.prettify())
+    unit_values = [_text_without_hidden_value_nodes(node) for node in component.select("span.Unit")]
+    unit_text = clean_text(" ".join(filter(None, unit_values)))
 
-    seen: set[int] = set()
-    for node in candidate_nodes:
-        node_id = id(node)
-        if node_id in seen:
-            continue
-        seen.add(node_id)
-        text = _text_without_hidden_value_nodes(node)
-        tuition_text = _extract_tuition_fee_text(text)
-        if tuition_text and normalize_tuition(tuition_text)["amount"] is not None:
+    for selector in [".Value", ".ValueContainer", ".TuitionFeeContainer"]:
+        value_node = component.select_one(selector)
+        text = _tuition_text_with_unit(_text_without_hidden_value_nodes(value_node), unit_text)
+        tuition_text = _valid_tuition_text(text)
+        if tuition_text:
             return tuition_text
+
+    for span in component.select("span[data-currency]"):
+        text = _tuition_text_with_currency(_text_without_hidden_value_nodes(span), span.get("data-currency"))
+        text = _tuition_text_with_unit(text, unit_text)
+        tuition_text = _valid_tuition_text(text)
+        if tuition_text:
+            return tuition_text
+
+    for span in component.select("span[data-original_html]"):
+        text = _tuition_text_with_currency(span.get("data-original_html"), span.get("data-currency"))
+        text = _tuition_text_with_unit(text, unit_text)
+        tuition_text = _valid_tuition_text(text)
+        if tuition_text:
+            return tuition_text
+
     return None
 
 
