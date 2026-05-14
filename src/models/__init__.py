@@ -9,11 +9,12 @@ from .programme_application_requirement import ProgrammeApplicationRequirement
 from .university_ranking import UniversityRanking
 from .scholarship import Scholarship
 from .campus_location import CampusLocation
+from .crawl_failed_task import CrawlFailedTask
 from .university_review_summary import UniversityReviewSummary
 
 __all__ = [
     "University", "UniversityStatistics", "UniversityContentSection", "Programme",
     "ProgrammeDetail", "ProgrammeIntake", "ProgrammeLanguageRequirement",
     "ProgrammeApplicationRequirement", "UniversityRanking", "Scholarship",
-    "CampusLocation", "UniversityReviewSummary",
+    "CampusLocation", "UniversityReviewSummary", "CrawlFailedTask",
 ]

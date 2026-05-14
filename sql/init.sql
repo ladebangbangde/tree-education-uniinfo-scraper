@@ -231,3 +231,19 @@ CREATE TABLE IF NOT EXISTS university_review_summary (
   UNIQUE KEY uq_review_summary_university (university_id),
   CONSTRAINT fk_review_university FOREIGN KEY (university_id) REFERENCES university(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS crawl_failed_task (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  task_type VARCHAR(64) NOT NULL,
+  source_id BIGINT NULL,
+  source_name VARCHAR(255) NULL,
+  source_url VARCHAR(1024) NULL,
+  error_type VARCHAR(128) NULL,
+  error_message TEXT NULL,
+  retry_count INT DEFAULT 0,
+  status VARCHAR(32) DEFAULT 'failed',
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  KEY idx_crawl_failed_task_retry (status, retry_count, updated_at),
+  KEY idx_crawl_failed_task_dedupe (task_type, source_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

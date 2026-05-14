@@ -91,22 +91,66 @@ class BrowserClient:
             raise RuntimeError("BrowserClient must be used as a context manager")
 
         polite_sleep()
-        logger.info("Fetching {}", url)
+        wait_until_mode = "domcontentloaded"
+        timeout_used = settings.request_timeout_ms
+        logger.info(
+            "Fetching url={}, wait_until_mode={}, timeout_used={}",
+            url,
+            wait_until_mode,
+            timeout_used,
+        )
         page = self._context.new_page()
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=settings.request_timeout_ms)
-            try:
-                page.wait_for_load_state("networkidle", timeout=settings.request_timeout_ms)
-            except PlaywrightTimeoutError:
-                # Some public pages keep analytics/XHR open. DOMContentLoaded is
-                # enough for parser snapshots, so continue after logging.
-                logger.warning("networkidle timeout for {}; using DOMContentLoaded snapshot", url)
+            page.goto(url, wait_until=wait_until_mode, timeout=timeout_used)
             html = page.content()
             final_url = page.url
-            logger.info("Fetched {} bytes from {}", len(html), final_url)
+            logger.info(
+                "Fetch completed: url={}, final_url={}, html_length={}, wait_until_mode={}, timeout_used={}",
+                url,
+                final_url,
+                len(html),
+                wait_until_mode,
+                timeout_used,
+            )
             return FetchResult(url=url, html=html, final_url=final_url)
-        except (PlaywrightTimeoutError, PlaywrightError) as exc:
-            logger.exception("Fetch failed for {}: {}", url, exc)
+        except PlaywrightTimeoutError as exc:
+            final_url = page.url
+            try:
+                html = page.content()
+            except PlaywrightError:
+                html = ""
+            html_length = len(html or "")
+            logger.warning(
+                "Fetch timeout fallback: url={}, final_url={}, html_length={}, wait_until_mode={}, timeout_used={}, error={}",
+                url,
+                final_url,
+                html_length,
+                wait_until_mode,
+                timeout_used,
+                exc,
+            )
+            if html_length > 5000:
+                logger.info(
+                    "Using timeout fallback content: url={}, final_url={}, html_length={}, wait_until_mode={}, timeout_used={}",
+                    url,
+                    final_url,
+                    html_length,
+                    wait_until_mode,
+                    timeout_used,
+                )
+                return FetchResult(url=url, html=html, final_url=final_url)
+            raise
+        except PlaywrightError as exc:
+            final_url = page.url
+            logger.exception(
+                "Fetch failed: url={}, final_url={}, html_length={}, wait_until_mode={}, timeout_used={}, error={}",
+                url,
+                final_url,
+                0,
+                wait_until_mode,
+                timeout_used,
+                exc,
+            )
             raise
         finally:
             page.close()

@@ -10,6 +10,7 @@ from .tasks.crawl_programmes import crawl_programmes as crawl_programmes_task
 from .tasks.crawl_programme_detail import crawl_programme_detail as crawl_programme_detail_task
 from .tasks.crawl_universities import crawl_universities as crawl_universities_task
 from .tasks.crawl_university_detail import crawl_university_detail as crawl_university_detail_task
+from .tasks.retry_failed import retry_failed as retry_failed_task
 
 app = typer.Typer(help="Tree Education public university information scraper")
 
@@ -60,11 +61,25 @@ def crawl_all(
     )
     typer.echo(
         "crawl-all completed: "
-        f"universities_persisted={result.universities_persisted}, "
-        f"programme_success={result.programme_success_count}, "
-        f"programme_failed={result.programme_failed_count}, "
-        f"detail_success={result.detail_success_count}, "
-        f"detail_failed={result.detail_failed_count}"
+        f"universities_total={result.universities_total}, "
+        f"universities_success={result.universities_success}, "
+        f"universities_failed={result.universities_failed}, "
+        f"programmes_success={result.programmes_success}, "
+        f"programmes_failed={result.programmes_failed}, "
+        f"details_success={result.details_success}, "
+        f"details_failed={result.details_failed}"
+    )
+
+
+@app.command("retry-failed")
+def retry_failed(limit: int = typer.Option(20, min=1)) -> None:
+    result = retry_failed_task(limit=limit)
+    typer.echo(
+        "retry-failed completed: "
+        f"total={result.total}, "
+        f"success={result.success}, "
+        f"failed={result.failed}, "
+        f"dead={result.dead}"
     )
 
 
