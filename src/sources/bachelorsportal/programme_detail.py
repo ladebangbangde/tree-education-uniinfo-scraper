@@ -123,26 +123,28 @@ def _valid_tuition_text(text: str | None) -> str | None:
 
 
 def _quick_fact_tuition_text(component) -> str | None:
-    """Extract tuition from the Tuition fee QuickFact value area."""
+    """Extract tuition from the Tuition fee QuickFact value area only."""
     print(component.prettify())
-    unit_values = [_text_without_hidden_value_nodes(node) for node in component.select("span.Unit")]
+    value_node = component.select_one(".Value")
+    if value_node is None:
+        return None
+
+    unit_values = [_text_without_hidden_value_nodes(node) for node in value_node.select("span.Unit")]
     unit_text = clean_text(" ".join(filter(None, unit_values)))
 
-    for selector in [".Value", ".ValueContainer", ".TuitionFeeContainer"]:
-        value_node = component.select_one(selector)
-        text = _tuition_text_with_unit(_text_without_hidden_value_nodes(value_node), unit_text)
-        tuition_text = _valid_tuition_text(text)
-        if tuition_text:
-            return tuition_text
+    text = _tuition_text_with_unit(_text_without_hidden_value_nodes(value_node), unit_text)
+    tuition_text = _valid_tuition_text(text)
+    if tuition_text:
+        return tuition_text
 
-    for span in component.select("span[data-currency]"):
+    for span in value_node.select("span[data-currency]"):
         text = _tuition_text_with_currency(_text_without_hidden_value_nodes(span), span.get("data-currency"))
         text = _tuition_text_with_unit(text, unit_text)
         tuition_text = _valid_tuition_text(text)
         if tuition_text:
             return tuition_text
 
-    for span in component.select("span[data-original_html]"):
+    for span in value_node.select("span[data-original_html]"):
         text = _tuition_text_with_currency(span.get("data-original_html"), span.get("data-currency"))
         text = _tuition_text_with_unit(text, unit_text)
         tuition_text = _valid_tuition_text(text)
@@ -153,32 +155,19 @@ def _quick_fact_tuition_text(component) -> str | None:
 
 
 def _quick_fact_value_text(component) -> str | None:
-    """Extract visible value text from a Bachelorsportal QuickFactComponent."""
-    for selector in [".Value", ".ValueContainer", ".TuitionFeeContainer", '[class*="Value" i]']:
-        value_node = component.select_one(selector)
-        text = _text_without_hidden_value_nodes(value_node)
-        if text:
-            return text
-    label_node = component.select_one(".Label")
-    fragment = soupify(str(component))
-    for hidden in fragment.select(f"{HIDDEN_VALUE_SELECTORS}, .Label"):
-        hidden.decompose()
-    text = clean_text(fragment.get_text(" "))
-    label = clean_text(label_node.get_text(" ")) if label_node else None
-    if text and label and text.lower().startswith(label.lower()):
-        text = clean_text(text[len(label) :])
-    return text
+    """Extract visible value text from a Bachelorsportal QuickFactComponent .Value node."""
+    value_node = component.select_one(".Value")
+    return _text_without_hidden_value_nodes(value_node)
 
 
 def _quick_fact_label_value_map(soup) -> dict[str, str | None]:
-    """Map QuickFactComponent labels to their visible values."""
+    """Map QuickFactComponent .Label text to .Value text only."""
     label_map: dict[str, str | None] = {}
     for component in soup.select(".QuickFactComponent"):
         label_node = component.select_one(".Label")
-        label = clean_text(label_node.get_text(" ")) if label_node else None
-        component_text = _text_without_hidden_value_nodes(component) or ""
-        if not label and re.search(r"\bscholarships?\s+available\b", component_text, re.I):
-            label = "Scholarships available"
+        if label_node is None:
+            continue
+        label = clean_text(label_node.get_text(" ", strip=True))
         if not label:
             continue
         value = (
@@ -186,10 +175,7 @@ def _quick_fact_label_value_map(soup) -> dict[str, str | None]:
             if _label_key(label) == "tuition"
             else _quick_fact_value_text(component)
         )
-        if re.fullmatch(r"scholarships?\s+available", label, re.I) or re.search(
-            r"\bscholarships?\s+available\b", component_text, re.I
-        ):
-            label_map.setdefault("Scholarships available", value or "Scholarships available")
+        if value is None:
             continue
         label_map.setdefault(label, value)
     logger.info("parsed_label_map={}", label_map)
@@ -203,8 +189,8 @@ def _facts_from_quick_fact_components(soup) -> dict[str, str | None]:
         key = _label_key(label)
         if key:
             facts.setdefault(key, value)
-        elif re.fullmatch(r"scholarships?\s+available", label, re.I):
-            facts.setdefault("scholarship", label)
+    if soup.select_one(".ScholarshipsAvailableIncentiveLabel") is not None:
+        facts.setdefault("scholarship", "Scholarships available")
     return facts
 
 
