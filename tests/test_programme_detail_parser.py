@@ -220,6 +220,28 @@ class ProgrammeDetailParserTest(unittest.TestCase):
         self.assertEqual(facts["teaching_language"], "English")
         self.assertEqual(facts["scholarships_available"], 1)
 
+    def test_quick_fact_tuition_parser_supports_cny_and_ignores_hidden_nodes(self):
+        facts = parse_facts_summary(
+            """
+            <html><body>
+              <div class="QuickFactComponent RowComponent js-quickFactComponent">
+                <div class="Label">Tuition fee</div>
+                <div class="ValueContainer">
+                  <div class="TuitionFeeContainer">
+                    <span data-currency="CNY">280,343 CNY / year</span>
+                    <span class="Hidden Unknown js-notAvailable">Unknown</span>
+                  </div>
+                </div>
+              </div>
+            </body></html>
+            """
+        )
+
+        self.assertEqual(facts["tuition_amount"], Decimal("280343.00"))
+        self.assertEqual(facts["tuition_currency"], "CNY")
+        self.assertEqual(facts["tuition_period"], "year")
+        self.assertEqual(facts["tuition_text_raw"], "280,343 CNY / year")
+
     def test_tuition_parser_supports_gbp_year_values(self):
         parsed = parse_tuition_fact("17,900 GBP / year")
 
