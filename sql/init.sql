@@ -242,8 +242,7 @@ CREATE TABLE IF NOT EXISTS crawl_failed_task (
   error_message TEXT NULL,
   retry_count INT DEFAULT 0,
   status VARCHAR(32) DEFAULT 'failed',
-  created_at DATETIME NOT NULL,
-  updated_at DATETIME NOT NULL,
-  KEY idx_crawl_failed_task_retry (status, retry_count, updated_at),
-  KEY idx_crawl_failed_task_dedupe (task_type, source_id, status)
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_failed_task_active (task_type, source_id, source_url, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

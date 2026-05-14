@@ -75,10 +75,40 @@ def _print_facts_block_diagnostics(html_text: str) -> None:
         print("[FACTS_DIAG] facts block not present in fetched html")
 
 
-def _safe_programme_updates(parsed: dict, source_hash: str, crawled_at: datetime) -> dict:
+def _location_parts(location_text: str | None) -> tuple[str | None, str | None]:
+    if not location_text:
+        return None, None
+    parts = [part.strip() for part in location_text.split(",") if part.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[-1]
+    return None, None
+
+
+def _safe_programme_updates(
+    parsed: dict,
+    source_hash: str,
+    crawled_at: datetime,
+    existing_city: str | None = None,
+    existing_country: str | None = None,
+) -> dict:
     # The top facts card is the authority for these detail facts. Persist NULL
     # for missing facts instead of preserving stale values from earlier crawls.
     data = {field: parsed.get(field) for field in FACT_PROGRAMME_FIELDS}
+
+    raw_location = (parsed.get("_raw_facts") or {}).get("location")
+    city_from_location, country_from_location = _location_parts(raw_location)
+    if not data.get("city") and city_from_location:
+        data["city"] = city_from_location
+    if not data.get("country") and country_from_location:
+        data["country"] = country_from_location
+
+    # Location facts should supplement existing rows, not overwrite a value that
+    # was already populated by the programme-list crawl or a previous detail run.
+    if existing_city:
+        data.pop("city", None)
+    if existing_country:
+        data.pop("country", None)
+
     data["detail_crawled_at"] = crawled_at
     data["detail_source_hash"] = source_hash
     return data
@@ -123,7 +153,14 @@ def crawl_programme_detail(programme_id: int) -> bool:
             if programme.name and len(programme.name) > 500:
                 logger.warning("Programme name exceeds 500 chars; not updating name: programme_id={}", programme_id)
 
-            for key, value in _safe_programme_updates(parsed["programme"], source_hash, now).items():
+            updates = _safe_programme_updates(
+                parsed["programme"],
+                source_hash,
+                now,
+                existing_city=programme.city,
+                existing_country=programme.country,
+            )
+            for key, value in updates.items():
                 if hasattr(programme, key):
                     setattr(programme, key, value)
             programme.updated_at = now
