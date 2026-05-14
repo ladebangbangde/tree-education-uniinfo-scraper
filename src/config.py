@@ -44,7 +44,7 @@ class Settings:
         "CRAWLER_USER_AGENT", "Mozilla/5.0 TreeEducationBot/0.1"
     )
     snapshot_dir: str = os.getenv("SNAPSHOT_DIR", "data/snapshots")
-    request_timeout_ms: int = int(os.getenv("REQUEST_TIMEOUT_MS", "30000"))
+    request_timeout_ms: int = int(os.getenv("REQUEST_TIMEOUT_MS", "90000"))
     source_site: str = "bachelorsportal"
 
 
