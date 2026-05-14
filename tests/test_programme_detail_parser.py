@@ -73,9 +73,11 @@ QUICK_FACT_COMPONENT_HTML = """
       <div class="Label">Taught in</div>
       <div class="ValueContainer"><div class="Value">English</div></div>
     </div>
-    <div class="Button">
-      <span class="ScholarshipsAvailableIncentiveLabel">Scholarships available</span>
-      <button disabled>Check eligibility</button>
+    <div class="QuickFactComponent RowComponent js-quickFactComponent">
+      <div class="Button">
+        <span class="ScholarshipsAvailableIncentiveLabel">Scholarships available</span>
+        <button disabled>Check eligibility</button>
+      </div>
     </div>
   </body>
 </html>
@@ -175,8 +177,17 @@ class ProgrammeDetailParserTest(unittest.TestCase):
             <html><body>
               <div class="QuickFactComponent">
                 <div class="Label">Tuition fee</div>
-                <div class="ValueContainer"><div class="Value">164,451 CNY / year</div></div>
-                <div class="Button"><button>Scholarships available</button></div>
+                <div class="ValueContainer">
+                  <div class="Value">
+                    <span class="Title" data-amount="164451">164,451</span>
+                    <span class="CurrencyType">CNY</span>
+                    <span class="Unit">/ year</span>
+                  </div>
+                </div>
+                <div class="Button">
+                  <button class="Label">Scholarships available</button>
+                  <span class="ScholarshipsAvailableIncentiveLabel">Scholarships available</span>
+                </div>
               </div>
               <div class="QuickFactComponent">
                 <div class="Label">Duration</div>
@@ -198,7 +209,6 @@ class ProgrammeDetailParserTest(unittest.TestCase):
                 <div class="Label">Taught in</div>
                 <div class="ValueContainer"><div class="Value">English</div></div>
               </div>
-              <div class="ScholarshipsAvailableIncentiveLabel">Scholarships available</div>
             </body></html>
         """
 
