@@ -5,6 +5,7 @@ from .db import Base, engine
 from .logger import logger
 # Import models so metadata is populated for create-tables.
 from . import models  # noqa: F401
+from .tasks.crawl_all import crawl_all as crawl_all_task
 from .tasks.crawl_programmes import crawl_programmes as crawl_programmes_task
 from .tasks.crawl_programme_detail import crawl_programme_detail as crawl_programme_detail_task
 from .tasks.crawl_universities import crawl_universities as crawl_universities_task
@@ -36,6 +37,35 @@ def crawl_university_detail(university_id: int = typer.Option(..., min=1)) -> No
 def crawl_programmes(university_id: int = typer.Option(..., min=1), limit: int = typer.Option(20, min=1)) -> None:
     count = crawl_programmes_task(university_id=university_id, limit=limit)
     typer.echo(f"Persisted {count} programmes")
+
+
+@app.command("crawl-all")
+def crawl_all(
+    country: str = typer.Option("united-kingdom"),
+    university_limit: int = typer.Option(50, min=1),
+    programme_limit: int = typer.Option(50, min=1),
+    detail_limit: int = typer.Option(500, min=1),
+    skip_universities: bool = typer.Option(False),
+    skip_programmes: bool = typer.Option(False),
+    skip_details: bool = typer.Option(False),
+) -> None:
+    result = crawl_all_task(
+        country=country,
+        university_limit=university_limit,
+        programme_limit=programme_limit,
+        detail_limit=detail_limit,
+        skip_universities=skip_universities,
+        skip_programmes=skip_programmes,
+        skip_details=skip_details,
+    )
+    typer.echo(
+        "crawl-all completed: "
+        f"universities_persisted={result.universities_persisted}, "
+        f"programme_success={result.programme_success_count}, "
+        f"programme_failed={result.programme_failed_count}, "
+        f"detail_success={result.detail_success_count}, "
+        f"detail_failed={result.detail_failed_count}"
+    )
 
 
 @app.command("crawl-programme-detail")
